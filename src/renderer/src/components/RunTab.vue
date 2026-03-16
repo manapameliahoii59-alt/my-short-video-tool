@@ -66,6 +66,12 @@
             :value="name"
           />
         </el-select>
+        <el-button type="primary" link @click="selectAllProfiles" style="margin-left: 10px;">
+          [全选]
+        </el-button>
+        <el-button type="danger" link @click="selectedProfiles = []">
+          [清空]
+        </el-button>
       </div>
 
       <div v-if="selectedProfiles.length > 0" class="selected-tags-box">
@@ -300,6 +306,14 @@ const downloadTemplate = async () => {
     } else if (res.msg !== "取消下载") {
       ElMessage.error(`下载失败: ${res.msg}`);
     }
+  }
+};
+
+// 🌟 新增：一键全选所有方案
+const selectAllProfiles = () => {
+  if (props.allProfiles) {
+    // 取出 allProfiles 对象里的所有键名（即方案名），赋值给已选数组
+    selectedProfiles.value = Object.keys(props.allProfiles);
   }
 };
 

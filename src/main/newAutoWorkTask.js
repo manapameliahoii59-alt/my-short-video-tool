@@ -272,6 +272,7 @@ const GLOBAL_CACHE = {
   strategy: {},
   titlePackage: {},
   accountsList: null,
+  materials: {}, // 🌟 新增：素材专属缓存池
 };
 
 async function getDataWithCache(type, key, fetchFn) {
@@ -309,8 +310,8 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
   let searchProductName = testDramaName ? testDramaName : productName;
 
   try {
+    // --- 1. 获取剧集信息 ---
     const dramaCacheKey = `${productName}_${CONFIG.FILES.BUSINESS_TYPE}_${copyrightData}`;
-
     const productDataList = await getDataWithCache(
       "dramaInfo",
       dramaCacheKey,
@@ -357,6 +358,7 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       },
     );
 
+    if (isCancelled) return null; // 🌟 拦截点
     if (!productDataList || productDataList.length === 0) {
       throw new Error(`未找到剧集信息或版权不匹配: ${productName}`);
     }
@@ -372,6 +374,7 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
         `未在列表中找到匹配主体(${proConfig_subjectId})的剧集: ${productName}`,
       );
 
+    // --- 2. 获取链接模板、标题包、策略包 ---
     const linkTemplate = await getDataWithCache(
       "linkTemplate",
       proConfigData.proConfig_promotionLinkTemplateId,
@@ -408,6 +411,7 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
     );
     if (!strategy) throw new Error(`未找到匹配的策略包`);
 
+    // --- 3. 获取账户信息 ---
     const accountIds = getAvailableAccounts({
       email: proConfigData.proConfig_email,
       copyright: proConfigData.proConfig_copyright,
@@ -425,92 +429,125 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
     let accountList = accountData.map((item) => item.advertiserName);
     let idsList = accountData.map((item) => item.advertiserId);
 
-    await randomSleep(minTime, maxTime);
+    // 🌟 深度拦截睡眠：支持秒取消
+    await randomSleep(minTime, maxTime, () => isCancelled);
+    if (isCancelled) return null;
 
+    // --- 4. 🌟 核心优化：获取素材并加入缓存池 ---
     let tarMaterItem;
     if (materialFileNameData) {
       tarMaterItem = getTargetMaterialFileId(materialFileNameData);
     }
 
-    let resAsset;
-    let materials = [];
     let rankingListOrLibrarySign = "";
-    let isSpecify =
-      Array.isArray(specifyMaterialsArr) && specifyMaterialsArr.length > 0;
-
-    console.log(`   🔍 正在搜索素材 (Key: ${searchProductName})...`);
+    let isSpecify = Array.isArray(specifyMaterialsArr) && specifyMaterialsArr.length > 0;
     let rangeDataObj = getDateRangeByType(materialDateRangeData);
-    if (isSpecify) {
+
+    // 拼装精准的素材缓存 Key
+    const specifyKeyStr = isSpecify ? specifyMaterialsArr.join('-') : 'none';
+    const folderIdStr = tarMaterItem?.id || 'nofolder';
+    const materialCacheKey = `mat_${searchProductName}_${rangeDataObj.startDay}_${rangeDataObj.endDay}_${specifyKeyStr}_${folderIdStr}_${copyrightData}`;
+
+    console.log(`   🔍 准备获取素材 (Key: ${searchProductName})...`);
+
+    // 使用 getDataWithCache 包裹整个搜索逻辑
+    let materials = await getDataWithCache(
+      "materials",
+      materialCacheKey,
+      async () => {
+        let fetchMaterials = [];
+        let resAsset;
+
+        if (isSpecify) {
+          let _materialPar = {
+            queryPolicy: "em",
+            query: "",
+            showPrivateOnly: false,
+            sortingFields: [{ field: "updateTime", order: "desc" }],
+            includeFolder: false,
+            fullNames: specifyMaterialsArr,
+            libraryType: "public",
+            pageNo: 1,
+            pageSize: 20,
+          };
+          if (tarMaterItem?.id) _materialPar.folderId = tarMaterItem?.id;
+
+          resAsset = await client.post("/adv-asset-inside/search", _materialPar);
+          const rawMaterials = resAsset.data?.data?.materials || [];
+          fetchMaterials = rawMaterials.filter((item) => item.url && item.coverUrl);
+
+        } else if (!testDramaName) {
+          resAsset = await client.post(
+            "/adv-report-query/materialDay/getLatestCostByDayRangeV2",
+            {
+              materialInfo: searchProductName,
+              startDay: rangeDataObj.startDay,
+              endDay: rangeDataObj.endDay,
+              sortingFields: [{ field: "statCost", order: "desc" }],
+              pageNo: 1,
+              pageSize: pageSize,
+            },
+          );
+
+          let rawList = resAsset.data?.data?.list || [];
+          // 1. 基础过滤：必须有视频和封面
+          fetchMaterials = rawList.filter((item) => item.videoUrl && item.poster);
+
+          // 2. 精确过滤素材名称前缀
+          fetchMaterials = fetchMaterials.filter((materItem) => {
+            const materialName = materItem.adPlatformMaterialName || "";
+            
+            // 仅考虑 -、—、_ 三种分隔符
+            const parts = materialName.split(/[-—_]/);
+            const namePrefix = parts[0].trim();
+            
+            // 确保 productName 也去掉了首尾空格，防止因录入问题导致的匹配失败
+            const targetName = productName.trim();
+
+            // 只有当前缀完全等于目标剧名时才保留
+            return namePrefix === targetName;
+          });
+
+          if (fetchMaterials.length > 0) {
+            let materialscheckArr = fetchMaterials.map((item) => item.materialId);
+            let checkRes = await client.post("/adv-asset-inside/material/findId", {
+              oceanengineMaterialIds: materialscheckArr,
+            });
+            let mappingTable = checkRes.data?.data || {};
+            fetchMaterials = fetchMaterials.map((ele) => ({
+              ...ele,
+              mappingId: mappingTable[ele.materialId] || null,
+            }));
+          }
+        } else {
+          let _Materialpar2 = {
+            queryPolicy: "em",
+            query: searchProductName,
+            showPrivateOnly: false,
+            partOfFullName: true,
+            libraryType: "public",
+            pageNo: 1,
+            pageSize: pageSize,
+            sortingFields: [{ field: "updateTime", order: "desc" }],
+          };
+          if (tarMaterItem?.id) _Materialpar2.folderId = tarMaterItem?.id;
+
+          resAsset = await client.post("/adv-asset-inside/search", _Materialpar2);
+          const rawMaterials = resAsset.data?.data?.materials || [];
+          fetchMaterials = rawMaterials.filter((item) => item.url && item.coverUrl);
+        }
+
+        return fetchMaterials; // 将查到的结果返回给缓存系统
+      }
+    );
+
+    if (isCancelled) return null; // 🌟 获取素材回来后再次检查拦截
+
+    // 恢复打印状态标识
+    if (isSpecify || testDramaName) {
       rankingListOrLibrarySign = "素材库";
-      let _materialPar = {
-        queryPolicy: "em",
-        query: "",
-        showPrivateOnly: false,
-        sortingFields: [{ field: "updateTime", order: "desc" }],
-        includeFolder: false,
-        fullNames: specifyMaterialsArr,
-        libraryType: "public",
-        pageNo: 1,
-        pageSize: 20,
-      };
-      if (tarMaterItem?.id) _materialPar.folderId = tarMaterItem?.id;
-
-      resAsset = await client.post("/adv-asset-inside/search", _materialPar);
-      const rawMaterials = resAsset.data?.data?.materials || [];
-      materials = rawMaterials.filter((item) => item.url && item.coverUrl);
-    } else if (!testDramaName) {
-      rankingListOrLibrarySign = "素材榜单";
-      const now = new Date();
-      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-      resAsset = await client.post(
-        "/adv-report-query/materialDay/getLatestCostByDayRangeV2",
-        {
-          materialInfo: searchProductName,
-          startDay: rangeDataObj.startDay,
-          endDay: rangeDataObj.endDay,
-          sortingFields: [{ field: "statCost", order: "desc" }],
-          pageNo: 1,
-          pageSize: pageSize,
-        },
-      );
-
-      let rawList = resAsset.data?.data?.list || [];
-      materials = rawList.filter((item) => item.videoUrl && item.poster);
-
-      if (copyrightData == "ZZ番茄" && materials.length > 0) {
-        materials = materials.filter(
-          (materItem) => clearSpaces(materItem.bookName) == productName,
-        );
-      }
-
-      if (materials.length > 0) {
-        let materialscheckArr = materials.map((item) => item.materialId);
-        let checkRes = await client.post("/adv-asset-inside/material/findId", {
-          oceanengineMaterialIds: materialscheckArr,
-        });
-        let mappingTable = checkRes.data?.data || {};
-        materials = materials.map((ele) => ({
-          ...ele,
-          mappingId: mappingTable[ele.materialId] || null,
-        }));
-      }
     } else {
-      rankingListOrLibrarySign = "素材库";
-      let _Materialpar2 = {
-        queryPolicy: "em",
-        query: searchProductName,
-        showPrivateOnly: false,
-        partOfFullName: true,
-        libraryType: "public",
-        pageNo: 1,
-        pageSize: pageSize,
-        sortingFields: [{ field: "updateTime", order: "desc" }],
-      };
-      if (tarMaterItem?.id) _Materialpar2.folderId = tarMaterItem?.id;
-
-      resAsset = await client.post("/adv-asset-inside/search", _Materialpar2);
-      const rawMaterials = resAsset.data?.data?.materials || [];
-      materials = rawMaterials.filter((item) => item.url && item.coverUrl);
+      rankingListOrLibrarySign = "素材榜单";
     }
 
     if (!materials || materials.length === 0)
@@ -520,6 +557,7 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       `   🎬 素材获取成功: ${materials.length} 条 (${rankingListOrLibrarySign})`,
     );
 
+    // --- 5. 数据组装 ---
     const ydData =
       ("0" + (new Date().getMonth() + 1)).slice(-2) +
       ("0" + new Date().getDate()).slice(-2);
@@ -883,7 +921,7 @@ async function runAutoTask(sender, uiConfig) {
   GLOBAL_CACHE.linkTemplate = {};
   GLOBAL_CACHE.strategy = {};
   GLOBAL_CACHE.titlePackage = {};
-
+  GLOBAL_CACHE.materials = {}; // 🌟 新增：每次启动清空素材缓存
   if (CONFIG.SETTINGS && CONFIG.SETTINGS.BASE_URL) {
     client.defaults.baseURL = CONFIG.SETTINGS.BASE_URL;
   }

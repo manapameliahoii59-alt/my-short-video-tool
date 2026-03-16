@@ -3,6 +3,17 @@
     <nav>
       <div class="nav-header">
         <h2>漫剧神器 v{{ appVersion }}</h2>
+        <el-button
+          type="primary"
+          link
+          size="small"
+          style="margin-top: 8px; color: #a0cfff; font-size: 12px; width: 120px; justify-content: center;"
+          :disabled="isCheckingUpdate"
+          @click="manualCheckUpdate"
+        >
+          <el-icon v-if="isCheckingUpdate" class="is-loading" style="margin-right: 4px;"><Loading /></el-icon>
+          <span>{{ isCheckingUpdate ? '正在检测...' : '[手动检查新版本]' }}</span>
+        </el-button>
       </div>
       <div
         :class="['nav-item', { active: currentTab === 'run' }]"
@@ -131,7 +142,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
-import { VideoPlay, Setting, Tools, Loading } from "@element-plus/icons-vue"; // 🌟 新增引入 Loading 图标
+import { VideoPlay, Setting, Tools, Loading } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 // 引入子组件
@@ -155,40 +166,36 @@ const settings = ref({
 });
 const lastConfig = ref({});
 const appVersion = ref("1.0.0"); // 默认值
-// 增加 isRunning 状态
 const isRunning = ref(false);
 
 // --- 🌟 更新状态管理 ---
 const isDownloading = ref(false); // 是否显示进度条遮罩
 const downloadPercent = ref(0); // 下载进度百分比
 const showUpdateLog = ref(false); // 控制更新公告弹窗显示
-const isLoadingLog = ref(false); // 🌟 是否正在加载更新日志
-const updateContent = ref([]); // 🌟 存放动态更新内容的数组
-
+const isLoadingLog = ref(false); // 是否正在加载更新日志
+const updateContent = ref([]); // 存放动态更新内容的数组
+const isCheckingUpdate = ref(false); // 🌟 新增：控制手动检查按钮的 loading 状态
+let updateTimeoutTimer = null;
 // --- 拖拽防御逻辑 ---
 const preventDefaultDrop = (e) => {
   e.preventDefault();
 };
 
 /**
- * 🌟 获取动态更新日志
+ * 获取动态更新日志
  */
 const fetchUpdateLog = async (version) => {
   isLoadingLog.value = true;
   try {
-    // 拉取服务器上的 changelog.json，带上时间戳防止浏览器缓存
     const res = await fetch(
       `http://129.204.86.63:3535/api/changelog.json?t=${Date.now()}`,
     );
 
     if (res.ok) {
       const allLogs = await res.json();
-
-      // 根据当前版本号，去 JSON 里匹配对应的更新条目
       if (allLogs[version] && allLogs[version].length > 0) {
         updateContent.value = allLogs[version];
       } else {
-        // 如果服务器上没写这个版本的日志，给个兜底文案
         updateContent.value = [
           "✨ 优化了系统底层逻辑，提升了运行稳定性",
           "🛡️ 修复了部分影响体验的已知问题",
@@ -199,13 +206,35 @@ const fetchUpdateLog = async (version) => {
     }
   } catch (error) {
     console.error("获取更新日志失败:", error);
-    // 网络错误时的兜底文案
     updateContent.value = [
       "✨ 优化了系统核心机制，执行效率大幅提升",
       "🛡️ 强化了 API 请求的安全防护策略",
     ];
   } finally {
     isLoadingLog.value = false;
+  }
+};
+
+// 🌟 新增：手动检查更新的方法
+const manualCheckUpdate = () => {
+  if (isCheckingUpdate.value) return; // 防止狂点重复触发
+  
+  isCheckingUpdate.value = true;
+  
+  // 开启 15 秒超时倒计时
+  updateTimeoutTimer = setTimeout(() => {
+    if (isCheckingUpdate.value) {
+      isCheckingUpdate.value = false;
+      ElMessage.warning("检测更新超时，请检查网络状态或稍后再试");
+    }
+  }, 15000);
+
+  if (window.api && window.api.checkForUpdates) {
+    window.api.checkForUpdates();
+  } else {
+    ElMessage.error("更新组件未初始化");
+    isCheckingUpdate.value = false;
+    clearTimeout(updateTimeoutTimer); // 报错了就赶紧把定时器掐掉
   }
 };
 
@@ -232,18 +261,27 @@ onMounted(() => {
       dateRange: data.FILES?.dateRange || "",
     };
     if (data.appVersion) {
-      appVersion.value = data.appVersion; // 自动更新 UI 上的版本号
+      appVersion.value = data.appVersion;
     }
 
-    // 🌟🌟🌟 核心：判断是否刚更新完软件 🌟🌟🌟
     if (data.isUpdated) {
-      showUpdateLog.value = true; // 弹窗显示
-      fetchUpdateLog(data.appVersion); // 触发网络请求拉取日志
+      showUpdateLog.value = true;
+      fetchUpdateLog(data.appVersion);
     }
   });
 
   // 🌟 监听云端自动更新系统
   window.api.onUpdateMessage((data) => {
+    // 只要有结果返回（发现新版、已是最新、报错），就解除检查按钮的 loading 状态
+    if (["available", "latest", "error"].includes(data.type)) {
+      isCheckingUpdate.value = false;
+          if (updateTimeoutTimer) {
+        clearTimeout(updateTimeoutTimer);
+        updateTimeoutTimer = null;
+      }
+    }
+
+
     if (data.type === "available") {
       ElMessageBox.confirm(
         `检测到新版本 v${data.version}，是否立即更新并重启软件？`,
@@ -256,24 +294,21 @@ onMounted(() => {
         },
       )
         .then(() => {
-          // 用户同意后，开启全屏进度条锁定
           isDownloading.value = true;
           downloadPercent.value = 0;
           window.api.confirmDownload();
         })
         .catch(() => {});
     } else if (data.type === "downloading") {
-      // 核心：更新实时下载进度
       downloadPercent.value = data.percent;
     } else if (data.type === "downloaded") {
-      // 下载完成，解除进度条，弹出安装确认
       isDownloading.value = false;
       ElMessageBox.confirm(
         "新版本已准备就绪，点击“立即安装”将重启并完成升级。",
         "🎉 下载成功",
         {
           confirmButtonText: "立即安装",
-          showCancelButton: false, // 强制更新建议不给取消
+          showCancelButton: false,
           type: "success",
           closeOnClickModal: false,
           closeOnPressEscape: false,
@@ -284,7 +319,8 @@ onMounted(() => {
         })
         .catch(() => {});
     } else if (data.type === "latest") {
-      // 如果需要，可以在这里提示“已经是最新版”
+      // 🌟 核心补全：告诉用户已经是最新版了
+      ElMessage.success("恭喜，当前已经是最新版本！");
     } else if (data.type === "error") {
       isDownloading.value = false;
       ElMessage.error(`更新包下载失败: ${data.msg}`);
@@ -301,16 +337,15 @@ onMounted(() => {
   // 2. 接收运行日志
   window.api.onLogUpdate((msg) => {
     logs.value.push(msg);
+    // 限制日志行数
     if (logs.value.length > 500) {
       logs.value.shift();
     }
   });
 
-  // 🌟 新增：监听任务运行状态
+  // 监听任务运行状态
   window.api.onTaskStatusChange((status) => {
     console.log("主进程发来的状态变了！现在是：", status);
-    // 加个强制弹窗看看有没有反应
-    // ElMessage.info("状态切换为：" + status);
     isRunning.value = status;
   });
 
@@ -325,7 +360,7 @@ onUnmounted(() => {
 });
 
 /**
- * 🌟 核心方法 1：保存全局系统设置
+ * 核心方法 1：保存全局系统设置
  */
 const handleSaveGlobalSettings = (data) => {
   settings.value = data;
@@ -336,7 +371,7 @@ const handleSaveGlobalSettings = (data) => {
 };
 
 /**
- * 🌟 核心方法 2：更新方案列表
+ * 核心方法 2：更新方案列表
  */
 const updateProfiles = (newProfiles) => {
   allProfiles.value = newProfiles;
@@ -344,7 +379,7 @@ const updateProfiles = (newProfiles) => {
 };
 
 /**
- * 🌟 核心方法 3：运行任务
+ * 核心方法 3：运行任务
  */
 const handleRunTask = (runConfig) => {
   if (!settings.value.userKey) {
@@ -352,6 +387,9 @@ const handleRunTask = (runConfig) => {
     currentTab.value = "settings";
     return;
   }
+
+  // 🌟 核心：每次点击启动前，自动清空上一轮留下的日志，保持界面轻便！
+  logs.value = [];
 
   const finalConfig = {
     ...runConfig,

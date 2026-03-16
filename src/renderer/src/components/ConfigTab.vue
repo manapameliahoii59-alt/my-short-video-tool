@@ -51,24 +51,27 @@
       <div class="sidebar-footer">
         <el-button-group style="width: 100%; display: flex">
           <el-button
-            style="flex: 1"
+            style="flex: 1; display: flex; justify-content: center; align-items: center;"
             size="small"
             plain
-            :loading="isCloudUploading"
-            :disabled="isCloudDownloading"
+            :disabled="isCloudUploading || isCloudDownloading"
             @click="handleCloudUpload"
           >
-            {{ isCloudUploading ? "备份中" : "☁️ 备份" }}
+            <el-icon v-if="isCloudUploading" class="is-loading" style="margin-right: 4px;"><Loading /></el-icon>
+            <span v-else style="margin-right: 4px;">☁️</span>
+            <span>{{ isCloudUploading ? "备份中..." : "备份" }}</span>
           </el-button>
+          
           <el-button
-            style="flex: 1"
+            style="flex: 1; display: flex; justify-content: center; align-items: center;"
             size="small"
             plain
-            :loading="isCloudDownloading"
-            :disabled="isCloudUploading"
+            :disabled="isCloudUploading || isCloudDownloading"
             @click="handleCloudDownload"
           >
-            {{ isCloudDownloading ? "同步中" : "📥 恢复" }}
+            <el-icon v-if="isCloudDownloading" class="is-loading" style="margin-right: 4px;"><Loading /></el-icon>
+            <span v-else style="margin-right: 4px;">📥</span>
+            <span>{{ isCloudDownloading ? "同步中..." : "恢复" }}</span>
           </el-button>
         </el-button-group>
       </div>
@@ -217,6 +220,7 @@ import {
   Document,
   DocumentChecked,
   UploadFilled,
+  Loading
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox, ElLoading } from "element-plus";
 
@@ -759,5 +763,18 @@ const openExternal = (path) => {
 .main-save-btn {
   width: 200px;
   font-weight: bold;
+}
+/* 🌟 新增：手动控制旋转动画，告别原生的跳动感 */
+.is-loading {
+  animation: rotating 2s linear infinite;
+}
+
+@keyframes rotating {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 </style>
