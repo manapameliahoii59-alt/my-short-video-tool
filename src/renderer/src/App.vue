@@ -334,12 +334,28 @@ onMounted(() => {
     }
   }, 3000);
 
-  // 2. 接收运行日志
+// 1. 在外面定义一个缓冲池和定时器
+  let logBuffer = [];
+  let flushLogTimer = null;
+
+  // 2. 接收运行日志 (带节流缓冲机制)
   window.api.onLogUpdate((msg) => {
-    logs.value.push(msg);
-    // 限制日志行数
-    if (logs.value.length > 500) {
-      logs.value.shift();
+    // 收到日志先不渲染，直接扔进缓冲池
+    logBuffer.push(msg);
+
+    // 如果没有开启定时器，就开启一个
+    if (!flushLogTimer) {
+      flushLogTimer = setTimeout(() => {
+        // 把原有的日志和缓冲池里的新日志合并
+        const combinedLogs = [...logs.value, ...logBuffer];
+        
+        // 截取最新的 500 条，直接整个替换赋值 (这会让 Vue 只执行 1 次渲染！)
+        logs.value = combinedLogs.length > 500 ? combinedLogs.slice(-500) : combinedLogs;
+        
+        // 渲染完后，清空缓冲池，重置定时器
+        logBuffer = [];
+        flushLogTimer = null;
+      }, 100); // 👈 每 100 毫秒强制打包渲染一次
     }
   });
 
