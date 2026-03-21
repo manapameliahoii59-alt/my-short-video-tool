@@ -22,7 +22,7 @@ body,
 
 /* 左侧导航 */
 nav {
-  width: 180px;
+  width: 160px;
   background-color: #2c3e50;
   color: white;
   display: flex;
@@ -63,7 +63,7 @@ main {
 /* Tab 内容容器 */
 .tab-content {
   flex: 1;
-  padding: 15px; /* 适当减小内边距 */
+  padding: 12px; /* 适当减小内边距 */
   overflow: hidden; /* 🌟 重点：外层不滚动，由内部组件自己处理滚动 */
   background-color: #f4f7f6;
   display: flex;

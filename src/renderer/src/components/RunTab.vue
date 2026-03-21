@@ -8,9 +8,7 @@
       @dragleave.prevent.stop="isDragging = false"
       @drop.prevent.stop="handleDrop"
     >
-      <span
-        style="width: 100px; font-weight: bold; color: #409eff; flex-shrink: 0"
-      >
+      <span style="width: 100px; font-weight: bold; color: #409eff; flex-shrink: 0">
         全局剧单：
       </span>
       <div class="path-link-wrapper">
@@ -28,20 +26,9 @@
         </span>
       </div>
 
-      <el-button type="success" link @click="downloadTemplate">
-        [下载模板]
-      </el-button>
-      <el-button type="primary" link @click="pickGlobalDrama">
-        [更换剧单]
-      </el-button>
-      <el-button
-        v-if="globalDramaList"
-        type="danger"
-        link
-        @click="clearGlobalDrama"
-      >
-        [清除]
-      </el-button>
+      <el-button type="success" link @click="downloadTemplate"> [下载模板] </el-button>
+      <el-button type="primary" link @click="pickGlobalDrama"> [更换剧单] </el-button>
+      <el-button v-if="globalDramaList" type="danger" link @click="clearGlobalDrama"> [清除] </el-button>
     </div>
 
     <div class="card-header-actions profile-select-section">
@@ -56,16 +43,28 @@
           collapse-tags-tooltip
           filterable
           clearable
-          placeholder="可输入关键词搜索方案 (支持多选)"
+          placeholder="搜索或在分组中选择 (支持多选)"
           style="flex: 1"
         >
-          <el-option
-            v-for="(p, name) in allProfiles"
-            :key="name"
-            :label="name"
-            :value="name"
-          />
+          <el-option-group
+            v-for="group in groupedProfilesForSelect"
+            :key="group.label"
+            :label="group.label"
+          >
+            <el-option
+              v-for="name in group.options"
+              :key="name"
+              :label="name"
+              :value="name"
+            >
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>{{ name }}</span>
+                <span style="color: #909399; font-size: 12px;">{{ allProfiles[name]?.businessType }}</span>
+              </div>
+            </el-option>
+          </el-option-group>
         </el-select>
+
         <el-button type="primary" link @click="selectAllProfiles" style="margin-left: 10px;">
           [全选]
         </el-button>
@@ -128,55 +127,65 @@
         <span>{{ isStopping ? "正在取消任务..." : "🚫 取消当前任务" }}</span>
       </el-button>
 
-      <el-button
-        type="info"
-        size="large"
-        :icon="Delete"
-        @click="$emit('clear-logs')"
-      >
+      <el-button type="info" size="large" :icon="Delete" @click="$emit('clear-logs')">
         清空日志
       </el-button>
     </div>
 
     <div id="log-window" ref="logRef">
-      <div
-        v-for="(log, i) in logs"
-        :key="i"
-        class="log-line"
-        v-html="log"
-      ></div>
+      <div v-for="(log, i) in logs" :key="i" class="log-line" v-html="log"></div>
       <div v-if="logs.length === 0" class="log-empty">⏳ 等待指令启动...</div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, watch, nextTick } from "vue";
+import { ref, reactive, watch, nextTick, computed } from "vue";
 import {
   VideoPlay,
   Delete,
   Document,
   DocumentChecked,
-  Loading, // 🌟 新增引入这个图标
+  Loading
 } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 
-const props = defineProps([
-  "allProfiles",
-  "logs",
-  "globalDramaList",
-  "isRunning",
-]);
+const props = defineProps(["allProfiles", "logs", "globalDramaList", "isRunning"]);
 const emit = defineEmits(["run-task", "clear-logs", "update-global-drama"]);
-// 🌟 新增：局部状态，记录用户是否点击了取消
-const isStopping = ref(false);
 
+const isStopping = ref(false);
 const selectedProfiles = ref([]);
 const logRef = ref(null);
 const isDragging = ref(false);
 
-const form = reactive({
-  action: "publish",
+const form = reactive({ action: "publish" });
+
+// 将所有方案按分组重新整理，供下拉框使用
+const groupedProfilesForSelect = computed(() => {
+  if (!props.allProfiles) return [];
+  
+  const groupsMap = new Map();
+  // 保证“默认分组”排第一
+  groupsMap.set("默认分组", []);
+
+  Object.keys(props.allProfiles).forEach(name => {
+    const groupName = props.allProfiles[name].group || "默认分组";
+    if (!groupsMap.has(groupName)) {
+      groupsMap.set(groupName, []);
+    }
+    groupsMap.get(groupName).push(name);
+  });
+
+  const result = [];
+  for (const [gName, pList] of groupsMap.entries()) {
+    if (pList.length > 0 || gName === "默认分组") {
+      result.push({
+        label: `📂 ${gName}`,
+        options: pList
+      });
+    }
+  }
+  return result;
 });
 
 const getFileName = (path) => (path ? path.split(/[\\/]/).pop() : "");
@@ -191,40 +200,23 @@ const openProfileFolder = (name) => {
   }
 };
 
-// 🌟 监听 isRunning 的变化：一旦任务彻底停下来了（isRunning 变回 false），把 isStopping 重置
-watch(
-  () => props.isRunning,
-  (newVal) => {
-    if (newVal === false) {
-      isStopping.value = false;
-    }
-  },
-);
+watch(() => props.isRunning, (newVal) => {
+  if (newVal === false) isStopping.value = false;
+});
 
 const cancelTask = () => {
   if (window.api && window.api.stopTask) {
-    isStopping.value = true; // 🌟 第一时间切换状态，让按钮变灰/转圈
+    isStopping.value = true;
     window.api.stopTask();
   }
 };
 
-/**
- * 统一导入文件处理
- */
 const processImportFile = async (sourcePath) => {
   if (!sourcePath) return;
-
   const isExcel = sourcePath.toLowerCase().match(/\.(xlsx|xls|csv)$/);
-  if (!isExcel) {
-    ElMessage.error("请上传 Excel 或 CSV 格式的文件");
-    return;
-  }
+  if (!isExcel) return ElMessage.error("请上传 Excel 或 CSV 格式的文件");
 
-  const res = await window.api.importFile({
-    profileName: "global_assets",
-    sourcePath,
-  });
-
+  const res = await window.api.importFile({ profileName: "global_assets", sourcePath });
   if (res.success) {
     emit("update-global-drama", res.fileName);
     ElMessage.success("全局剧单已更新");
@@ -232,8 +224,6 @@ const processImportFile = async (sourcePath) => {
     ElMessage.error("文件导入失败: " + res.msg);
   }
 };
-
-// --- 🌟 按照 ConfigTab.vue 完全重写的拖拽逻辑 ---
 
 const onDragOver = (event) => {
   event.preventDefault();
@@ -244,32 +234,16 @@ const onDragOver = (event) => {
 
 const handleDrop = (event) => {
   isDragging.value = false;
-
   const file = event.dataTransfer?.files[0];
   if (!file) return;
-
-  // 🌟 核心修复：使用你项目中预先定义好的 getFilePath 方法获取真实路径
-  let filePath = "";
-  if (window.api && window.api.getFilePath) {
-    filePath = window.api.getFilePath(file);
-  } else {
-    filePath = file.path;
-  }
-
-  if (filePath) {
-    processImportFile(filePath);
-  } else {
-    ElMessage.warning("无法读取文件路径，请点击选择");
-  }
+  const filePath = window.api?.getFilePath ? window.api.getFilePath(file) : file.path;
+  if (filePath) processImportFile(filePath);
+  else ElMessage.warning("无法读取文件路径");
 };
-
-// --- 其他功能 ---
 
 const pickGlobalDrama = async () => {
   const sourcePath = await window.api.openFile();
-  if (sourcePath) {
-    processImportFile(sourcePath);
-  }
+  if (sourcePath) processImportFile(sourcePath);
 };
 
 const clearGlobalDrama = () => {
@@ -279,17 +253,13 @@ const clearGlobalDrama = () => {
 
 const handleOpenGlobalDrama = () => {
   if (props.globalDramaList) {
-    window.api.openExternal({
-      profileName: "global_assets",
-      fileName: props.globalDramaList,
-    });
+    window.api.openExternal({ profileName: "global_assets", fileName: props.globalDramaList });
   }
 };
 
 const start = () => {
   if (!props.globalDramaList) return ElMessage.warning("请先选择全局剧单文件");
-  if (selectedProfiles.value.length === 0)
-    return ElMessage.warning("请至少选择一个运行方案");
+  if (selectedProfiles.value.length === 0) return ElMessage.warning("请至少选择一个运行方案");
 
   emit("run-task", {
     selectedProfiles: selectedProfiles.value,
@@ -299,35 +269,24 @@ const start = () => {
 };
 
 const downloadTemplate = async () => {
-  if (window.api && window.api.downloadDramaTemplate) {
+  if (window.api?.downloadDramaTemplate) {
     const res = await window.api.downloadDramaTemplate();
-    if (res.success) {
-      ElMessage.success(`模板已成功保存至：${res.filePath}`);
-    } else if (res.msg !== "取消下载") {
-      ElMessage.error(`下载失败: ${res.msg}`);
-    }
+    if (res.success) ElMessage.success(`模板已保存至：${res.filePath}`);
+    else if (res.msg !== "取消下载") ElMessage.error(`下载失败: ${res.msg}`);
   }
 };
 
-// 🌟 新增：一键全选所有方案
 const selectAllProfiles = () => {
   if (props.allProfiles) {
-    // 取出 allProfiles 对象里的所有键名（即方案名），赋值给已选数组
     selectedProfiles.value = Object.keys(props.allProfiles);
   }
 };
 
-watch(
-  () => props.logs,
-  () => {
-    nextTick(() => {
-      if (logRef.value) {
-        logRef.value.scrollTop = logRef.value.scrollHeight;
-      }
-    });
-  },
-  { deep: true },
-);
+watch(() => props.logs, () => {
+  nextTick(() => {
+    if (logRef.value) logRef.value.scrollTop = logRef.value.scrollHeight;
+  });
+}, { deep: true });
 </script>
 
 <style scoped>
@@ -338,7 +297,6 @@ watch(
   box-sizing: border-box;
 }
 
-/* 🌟 去掉了之前可能导致冲突的 pointer-events 设置 */
 .card-header-actions {
   background: #fff;
   padding: 12px 15px;
@@ -350,7 +308,6 @@ watch(
   transition: all 0.3s ease;
 }
 
-/* 拖拽高亮样式 */
 .global-drama-section.is-dragging {
   border-color: #409eff;
   background-color: #f0f7ff;
@@ -383,13 +340,8 @@ watch(
   overflow-y: auto;
 }
 
-.selected-tags-box::-webkit-scrollbar {
-  width: 6px;
-}
-.selected-tags-box::-webkit-scrollbar-thumb {
-  background-color: #dcdfe6;
-  border-radius: 4px;
-}
+.selected-tags-box::-webkit-scrollbar { width: 6px; }
+.selected-tags-box::-webkit-scrollbar-thumb { background-color: #dcdfe6; border-radius: 4px; }
 
 .detail-panel {
   background: #fff;
@@ -400,23 +352,9 @@ watch(
   margin-bottom: 15px;
 }
 
-.form-row {
-  display: flex;
-  align-items: center;
-  font-size: 14px;
-}
-
-.label-text {
-  width: 100px;
-  color: #606266;
-  font-weight: bold;
-}
-
-.path-link-wrapper {
-  flex: 1;
-  overflow: hidden;
-  margin-right: 10px;
-}
+.form-row { display: flex; align-items: center; font-size: 14px; }
+.label-text { width: 100px; color: #606266; font-weight: bold; }
+.path-link-wrapper { flex: 1; overflow: hidden; margin-right: 10px; }
 
 .file-link-text {
   color: #409eff;
@@ -430,29 +368,9 @@ watch(
   text-overflow: ellipsis;
 }
 
-.file-none-text {
-  color: #909399;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.actions {
-  display: flex;
-  gap: 15px;
-  margin-bottom: 10px;
-  flex-shrink: 0;
-}
-
-/* 锁定按钮宽度，防止文字切换时按钮忽大忽小 */
-.btn-start {
-  flex: 3;
-  font-weight: bold;
-  min-width: 220px; /* 🌟 核心：给个固定最小宽度，文字长短变化不抖动 */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
+.file-none-text { color: #909399; display: flex; align-items: center; gap: 5px; }
+.actions { display: flex; gap: 15px; margin-bottom: 10px; flex-shrink: 0; }
+.btn-start { flex: 3; font-weight: bold; min-width: 240px; display: flex; align-items: center; justify-content: center; }
 
 #log-window {
   flex: 1;
@@ -467,42 +385,15 @@ watch(
   border: 1px solid #333;
 }
 
-.log-line {
-  margin-bottom: 4px;
-  word-break: break-all;
-}
+.log-line { margin-bottom: 4px; word-break: break-all; }
+.log-empty { color: #666; text-align: center; margin-top: 20px; }
 
-.log-empty {
-  color: #666;
-  text-align: center;
-  margin-top: 20px;
-}
-
-:deep(.el-radio-group) {
-  display: flex;
-  align-items: center;
-}
-
-/* 强制给取消状态一点置灰感，但保持红色基调 */
-.btn-cancel.is-disabled {
-  opacity: 0.8;
-  background-color: #fab6b6 !important;
-  border-color: #fab6b6 !important;
-  color: #fff !important;
-}
-
-/* 确保旋转图标有旋转动画 */
-.is-loading {
-  animation: rotating 2s linear infinite;
-  margin-right: 8px; /* 图标和文字的间距 */
-}
+:deep(.el-radio-group) { display: flex; align-items: center; }
+.btn-cancel.is-disabled { opacity: 0.8; background-color: #fab6b6 !important; border-color: #fab6b6 !important; color: #fff !important; }
+.is-loading { animation: rotating 2s linear infinite; margin-right: 8px; }
 
 @keyframes rotating {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>
