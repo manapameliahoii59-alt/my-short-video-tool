@@ -15,18 +15,28 @@
           <span>{{ isCheckingUpdate ? '正在检测...' : '[手动检查新版本]' }}</span>
         </el-button>
       </div>
+      
       <div
         :class="['nav-item', { active: currentTab === 'run' }]"
         @click="currentTab = 'run'"
       >
         <el-icon><VideoPlay /></el-icon> 运行任务
       </div>
+      
+      <div
+        :class="['nav-item', { active: currentTab === 'dataFetch' }]"
+        @click="currentTab = 'dataFetch'"
+      >
+        <el-icon><DataLine /></el-icon> 爆款抓取
+      </div>
+
       <div
         :class="['nav-item', { active: currentTab === 'config' }]"
         @click="currentTab = 'config'"
       >
         <el-icon><Setting /></el-icon> 方案配置
       </div>
+      
       <div
         :class="['nav-item', { active: currentTab === 'settings' }]"
         @click="currentTab = 'settings'"
@@ -51,6 +61,11 @@
           "
           @run-task="handleRunTask"
           @clear-logs="logs = []"
+        />
+
+        <DataFetchTab
+          v-if="currentTab === 'dataFetch'"
+          :all-profiles="allProfiles"
         />
 
         <ConfigTab
@@ -142,13 +157,16 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
-import { VideoPlay, Setting, Tools, Loading } from "@element-plus/icons-vue";
+// 🌟 核心：引入 DataLine 图标
+import { VideoPlay, Setting, Tools, Loading, DataLine } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 // 引入子组件
 import RunTab from "./components/RunTab.vue";
 import ConfigTab from "./components/ConfigTab.vue";
 import SettingsTab from "./components/SettingsTab.vue";
+// 🌟 核心：引入新写的抓取页面组件
+import DataFetchTab from "./components/DataFetchTab.vue"; 
 
 // --- 全局状态管理 ---
 const currentTab = ref("run");
@@ -165,17 +183,18 @@ const settings = ref({
   dateRange: "",
 });
 const lastConfig = ref({});
-const appVersion = ref("1.0.0"); // 默认值
+const appVersion = ref("1.0.0"); 
 const isRunning = ref(false);
 
-// --- 🌟 更新状态管理 ---
-const isDownloading = ref(false); // 是否显示进度条遮罩
-const downloadPercent = ref(0); // 下载进度百分比
-const showUpdateLog = ref(false); // 控制更新公告弹窗显示
-const isLoadingLog = ref(false); // 是否正在加载更新日志
-const updateContent = ref([]); // 存放动态更新内容的数组
-const isCheckingUpdate = ref(false); // 🌟 新增：控制手动检查按钮的 loading 状态
+// --- 更新状态管理 ---
+const isDownloading = ref(false); 
+const downloadPercent = ref(0); 
+const showUpdateLog = ref(false); 
+const isLoadingLog = ref(false); 
+const updateContent = ref([]); 
+const isCheckingUpdate = ref(false); 
 let updateTimeoutTimer = null;
+
 // --- 拖拽防御逻辑 ---
 const preventDefaultDrop = (e) => {
   e.preventDefault();
@@ -215,9 +234,9 @@ const fetchUpdateLog = async (version) => {
   }
 };
 
-// 🌟 新增：手动检查更新的方法
+// 手动检查更新的方法
 const manualCheckUpdate = () => {
-  if (isCheckingUpdate.value) return; // 防止狂点重复触发
+  if (isCheckingUpdate.value) return; 
   
   isCheckingUpdate.value = true;
   
@@ -234,7 +253,7 @@ const manualCheckUpdate = () => {
   } else {
     ElMessage.error("更新组件未初始化");
     isCheckingUpdate.value = false;
-    clearTimeout(updateTimeoutTimer); // 报错了就赶紧把定时器掐掉
+    clearTimeout(updateTimeoutTimer); 
   }
 };
 
@@ -270,17 +289,16 @@ onMounted(() => {
     }
   });
 
-  // 🌟 监听云端自动更新系统
+  // 监听云端自动更新系统
   window.api.onUpdateMessage((data) => {
-    // 只要有结果返回（发现新版、已是最新、报错），就解除检查按钮的 loading 状态
+    // 只要有结果返回，就解除检查按钮的 loading 状态
     if (["available", "latest", "error"].includes(data.type)) {
       isCheckingUpdate.value = false;
-          if (updateTimeoutTimer) {
+      if (updateTimeoutTimer) {
         clearTimeout(updateTimeoutTimer);
         updateTimeoutTimer = null;
       }
     }
-
 
     if (data.type === "available") {
       ElMessageBox.confirm(
@@ -319,7 +337,6 @@ onMounted(() => {
         })
         .catch(() => {});
     } else if (data.type === "latest") {
-      // 🌟 核心补全：告诉用户已经是最新版了
       ElMessage.success("恭喜，当前已经是最新版本！");
     } else if (data.type === "error") {
       isDownloading.value = false;
@@ -334,28 +351,21 @@ onMounted(() => {
     }
   }, 3000);
 
-// 1. 在外面定义一个缓冲池和定时器
+  // 接收运行日志 (带节流缓冲机制)
   let logBuffer = [];
   let flushLogTimer = null;
 
-  // 2. 接收运行日志 (带节流缓冲机制)
   window.api.onLogUpdate((msg) => {
-    // 收到日志先不渲染，直接扔进缓冲池
     logBuffer.push(msg);
 
-    // 如果没有开启定时器，就开启一个
     if (!flushLogTimer) {
       flushLogTimer = setTimeout(() => {
-        // 把原有的日志和缓冲池里的新日志合并
         const combinedLogs = [...logs.value, ...logBuffer];
-        
-        // 截取最新的 500 条，直接整个替换赋值 (这会让 Vue 只执行 1 次渲染！)
         logs.value = combinedLogs.length > 500 ? combinedLogs.slice(-500) : combinedLogs;
         
-        // 渲染完后，清空缓冲池，重置定时器
         logBuffer = [];
         flushLogTimer = null;
-      }, 100); // 👈 每 100 毫秒强制打包渲染一次
+      }, 100); 
     }
   });
 
@@ -365,7 +375,7 @@ onMounted(() => {
     isRunning.value = status;
   });
 
-  // 3. 全局拖拽拦截
+  // 全局拖拽拦截
   document.addEventListener("dragover", preventDefaultDrop);
   document.addEventListener("drop", preventDefaultDrop);
 });
@@ -376,7 +386,7 @@ onUnmounted(() => {
 });
 
 /**
- * 核心方法 1：保存全局系统设置
+ * 保存全局系统设置
  */
 const handleSaveGlobalSettings = (data) => {
   settings.value = data;
@@ -387,7 +397,7 @@ const handleSaveGlobalSettings = (data) => {
 };
 
 /**
- * 核心方法 2：更新方案列表
+ * 更新方案列表
  */
 const updateProfiles = (newProfiles) => {
   allProfiles.value = newProfiles;
@@ -395,7 +405,7 @@ const updateProfiles = (newProfiles) => {
 };
 
 /**
- * 核心方法 3：运行任务
+ * 运行任务
  */
 const handleRunTask = (runConfig) => {
   if (!settings.value.userKey) {
@@ -404,7 +414,6 @@ const handleRunTask = (runConfig) => {
     return;
   }
 
-  // 🌟 核心：每次点击启动前，自动清空上一轮留下的日志，保持界面轻便！
   logs.value = [];
 
   const finalConfig = {
@@ -431,7 +440,7 @@ const handleRunTask = (runConfig) => {
   height: 100vh;
   width: 100vw;
   overflow: hidden;
-  position: relative; /* 为遮罩层提供定位基准 */
+  position: relative;
 }
 
 nav {
@@ -489,7 +498,6 @@ main {
   background-color: #f4f7f6;
 }
 
-/* 下载遮罩层样式 */
 .download-overlay {
   position: fixed;
   top: 0;
@@ -524,16 +532,11 @@ main {
   font-size: 13px;
 }
 
-/* Loading 旋转动画 */
 .is-loading {
   animation: rotating 2s linear infinite;
 }
 @keyframes rotating {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(360deg);
-  }
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 </style>

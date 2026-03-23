@@ -65,6 +65,19 @@ const api = {
     ipcRenderer.on("update-message", (event, data) => callback(data));
   },
   openStorageDir: () => ipcRenderer.send("open-storage-dir"),
+  // --- 爆款数据抓取 ---
+  startAutoFetch: (config) => ipcRenderer.send("start-auto-fetch", config),
+  stopAutoFetch: () => ipcRenderer.send("stop-auto-fetch"),
+  onFetchLogUpdate: (callback) => {
+    const sub = (_event, val) => callback(val);
+    ipcRenderer.on("fetch-log-update", sub);
+    return () => ipcRenderer.removeListener("fetch-log-update", sub);
+  },
+  exportDramasExcel: (payload) => ipcRenderer.invoke("export-dramas-excel", payload),
+  fetchGoodDramas: (params) => ipcRenderer.invoke("fetch-good-dramas", params),
+  cancelFetchDramas: () => ipcRenderer.send("cancel-fetch-dramas"), // 🌟 增加这一行
+  saveFetchSettings: (data) => ipcRenderer.invoke("save-fetch-settings", data),
+  getFetchSettings: () => ipcRenderer.invoke("get-fetch-settings"),
 };
 
 // 暴露接口到 window.api

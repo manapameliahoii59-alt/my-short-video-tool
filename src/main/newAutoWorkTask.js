@@ -26,6 +26,7 @@ import {
   getDateRangeByType,
   getCachedAccounts,
   clearAccountsCache,
+  ensureAuth
 } from "./utils";
 
 let uiSender = null;
@@ -65,7 +66,7 @@ const CONFIGData = {
   BOOK_FILE: path.join(rootDir, "剧单.xlsx"),
   TEMPLATE_FILE: path.join(rootDir, "模板_付费.xlsx"),
 };
-
+let globalSession = { token: "", time: 0 };
 const client = axios.create({
   baseURL: CONFIGData.BASE_URL,
   timeout: 15000,
@@ -74,6 +75,18 @@ const client = axios.create({
     Origin: "https://console.iocpx.com",
     Referer: "https://console.iocpx.com/",
   },
+});
+
+// 👇 🌟 新增：注入拦截器！这能保证哪怕代码写出花来，请求头也绝对带上 Token
+client.interceptors.request.use((config) => {
+  if (globalSession && globalSession.token) {
+    // 强制转换为小写，兼容巨量后端的 Header 校验
+    config.headers["authorization"] = globalSession.token;
+    config.headers["cookie"] = `ocpx_session_id=${globalSession.token}`;
+  }
+  return config;
+}, (error) => {
+  return Promise.reject(error);
 });
 
 function getAvailableAccounts(
@@ -132,107 +145,107 @@ const writeApiLog = (step, params, response) => {
   return;
 };
 
-let globalSession = { token: "", time: 0 };
+
 
 /**
  * 2. 身份认证
  */
-async function ensureAuth() {
-  let sessionId = "";
+// async function ensureAuth() {
+//   let sessionId = "";
 
-  if (
-    globalSession.token &&
-    Date.now() - globalSession.time < 6 * 24 * 60 * 60 * 1000
-  ) {
-    sessionId = globalSession.token;
-  }
+//   if (
+//     globalSession.token &&
+//     Date.now() - globalSession.time < 6 * 24 * 60 * 60 * 1000
+//   ) {
+//     sessionId = globalSession.token;
+//   }
 
-  if (sessionId) {
-    try {
-      const testHeaders = {
-        authorization: sessionId,
-        cookie: `ocpx_session_id=${sessionId}`,
-      };
-      let testAuthRes = await client.get("/merchant/auth/info", {
-        headers: testHeaders,
-      });
+//   if (sessionId) {
+//     try {
+//       const testHeaders = {
+//         authorization: sessionId,
+//         cookie: `ocpx_session_id=${sessionId}`,
+//       };
+//       let testAuthRes = await client.get("/merchant/auth/info", {
+//         headers: testHeaders,
+//       });
 
-      if (testAuthRes.data?.code == 1001000001) {
-        console.log("🔄 登录已过期, 准备重新登陆...");
-        sessionId = "";
-        globalSession = { token: "", time: 0 };
-      } else {
-        console.log("✅ 登录状态有效 (内存复用)");
+//       if (testAuthRes.data?.code == 1001000001) {
+//         console.log("🔄 登录已过期, 准备重新登陆...");
+//         sessionId = "";
+//         globalSession = { token: "", time: 0 };
+//       } else {
+//         console.log("✅ 登录状态有效 (内存复用)");
 
-        await client.post(
-          "/merchant/auth/login2",
-          { moduleId: 3 },
-          { headers: testHeaders },
-        );
+//         await client.post(
+//           "/merchant/auth/login2",
+//           { moduleId: 3 },
+//           { headers: testHeaders },
+//         );
 
-        client.defaults.headers.common["authorization"] = sessionId;
-        client.defaults.headers.common["cookie"] =
-          `ocpx_session_id=${sessionId}`;
-        return true;
-      }
-    } catch (err) {
-      sessionId = "";
-      globalSession = { token: "", time: 0 };
-    }
-  }
+//         client.defaults.headers.common["authorization"] = sessionId;
+//         client.defaults.headers.common["cookie"] =
+//           `ocpx_session_id=${sessionId}`;
+//         return true;
+//       }
+//     } catch (err) {
+//       sessionId = "";
+//       globalSession = { token: "", time: 0 };
+//     }
+//   }
 
-  if (!sessionId) {
-    console.log("🔐 正在执行自动登录...");
+//   if (!sessionId) {
+//     console.log("🔐 正在执行自动登录...");
 
-    delete client.defaults.headers.common["authorization"];
-    delete client.defaults.headers.common["cookie"];
+//     delete client.defaults.headers.common["authorization"];
+//     delete client.defaults.headers.common["cookie"];
 
-    const { account, password } = CONFIG.WORKING_CONFIG;
+//     const { account, password } = CONFIG.WORKING_CONFIG;
 
-    if (!account || !password) {
-      console.error("❌ 无法登录：未获取到主账号或密码");
-      return false;
-    }
+//     if (!account || !password) {
+//       console.error("❌ 无法登录：未获取到主账号或密码");
+//       return false;
+//     }
 
-    try {
-      const r1 = await client.post("/merchant/auth/login1", {
-        email: account,
-        password: password,
-        rememberMe: true,
-      });
+//     try {
+//       const r1 = await client.post("/merchant/auth/login1", {
+//         email: account,
+//         password: password,
+//         rememberMe: true,
+//       });
 
-      const setCookie = r1.headers["set-cookie"];
-      sessionId = setCookie
-        .find((s) => s.startsWith("ocpx_session_id="))
-        .split(";")[0]
-        .split("=")[1];
+//       const setCookie = r1.headers["set-cookie"];
+//       sessionId = setCookie
+//         .find((s) => s.startsWith("ocpx_session_id="))
+//         .split(";")[0]
+//         .split("=")[1];
 
-      await client.post(
-        "/merchant/auth/login2",
-        { moduleId: 3 },
-        { headers: { cookie: `ocpx_session_id=${sessionId}` } },
-      );
+//       await client.post(
+//         "/merchant/auth/login2",
+//         { moduleId: 3 },
+//         { headers: { cookie: `ocpx_session_id=${sessionId}` } },
+//       );
 
-      globalSession = {
-        token: sessionId,
-        time: Date.now(),
-      };
+//       globalSession = {
+//         token: sessionId,
+//         time: Date.now(),
+//       };
 
-      if (uiSender) {
-        uiSender.send("save-session-persistent", globalSession);
-      }
+//       if (uiSender) {
+//         uiSender.send("save-session-persistent", globalSession);
+//       }
 
-      console.log("✅ 登录成功");
-    } catch (err) {
-      console.error("❌ 登录失败:", err.message);
-      return false;
-    }
-  }
+//       console.log("✅ 登录成功");
+//     } catch (err) {
+//       console.error("❌ 登录失败:", err.message);
+//       return false;
+//     }
+//   }
 
-  client.defaults.headers.common["authorization"] = sessionId;
-  client.defaults.headers.common["cookie"] = `ocpx_session_id=${sessionId}`;
-  return true;
-}
+//   client.defaults.headers.common["authorization"] = sessionId;
+//   client.defaults.headers.common["cookie"] = `ocpx_session_id=${sessionId}`;
+//   return true;
+// }
 
 let materialFileNameList = null;
 
@@ -327,7 +340,7 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
           "/adv-bookstore/bsShortDramaAlbumLinkFanqie/page",
           resbookParmas,
         );
-
+        
         let productData = resBook.data?.data?.list;
         if (copyrightData == "ZZ番茄" && Array.isArray(productData)) {
           productData = productData.filter(
@@ -937,7 +950,22 @@ async function runAutoTask(sender, uiConfig) {
   minTime = Number(authResult.minTime);
   maxTime = Number(authResult.maxTime);
 
-  if (!(await ensureAuth())) return;
+// 🌟 核心修复 1：继承主进程的 Session (如果有的话)，避免重复登录被踢下线
+  globalSession = CONFIG.session || { token: "", time: 0 };
+
+  // 🌟 核心修复 2：调用公共鉴权服务
+  const authRes = await ensureAuth(
+    CONFIG.WORKING_CONFIG.account,
+    CONFIG.WORKING_CONFIG.password,
+    globalSession,
+  );
+  
+  if (!authRes.success) {
+    throw new Error(authRes.msg);
+  }
+
+  // 🌟 核心修复 3：更新全局 session。此后拦截器会自动读取它发请求，绝不会再出现没带 Token 的情况！
+  globalSession = authRes.session;
 
   try {
     const dramaCount = await getDramaCount();

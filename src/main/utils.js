@@ -370,6 +370,108 @@ function clearAccountsCache() {
   accountsCache = null;
 }
 
+/** 获取今日日期字符串 (YYYY-MM-DD) */
+const getTodayString = () => {
+  const date = new Date();
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+/** 基础睡眠函数 (Promise) */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// --- 🌟 新增：全局自动化公共鉴权服务 ---
+/**
+ * 确保获取有效的登录凭证 (支持缓存复用与静默重登)
+ * @param {string} account 账号
+ * @param {string} password 密码
+ * @param {object} currentSession 当前内存/硬盘中的 session {token, time}
+ * @param {string} baseUrl 接口基准地址
+* @returns {Promise<object>} { success, session, headers, msg }
+ */
+async function ensureAuth(account, password, currentSession = null, baseUrl = "https://api.iocpx.com") {
+  let sessionId = "";
+
+  const authClient = axios.create({
+    baseURL: baseUrl,
+    timeout: 15000,
+    headers: {
+      "Content-Type": "application/json",
+      Origin: "https://console.iocpx.com",
+      Referer: "https://console.iocpx.com/",
+    },
+  });
+
+  // 1. 尝试复用缓存的 Token (6天内有效)
+  if (currentSession?.token && Date.now() - (currentSession.time || 0) < 6 * 24 * 60 * 60 * 1000) {
+    sessionId = currentSession.token;
+    try {
+      const testHeaders = {
+        authorization: sessionId,
+        cookie: `ocpx_session_id=${sessionId}`,
+      };
+      // 试探性请求
+      let testAuthRes = await authClient.get("/merchant/auth/info", { headers: testHeaders });
+
+      if (testAuthRes.data?.code == 1001000001) {
+        console.log("🔄 [鉴权服务] 登录已过期, 准备重新登陆...");
+        sessionId = "";
+      } else {
+        console.log("✅ [鉴权服务] 登录状态有效 (缓存复用)");
+        // 激活模块
+        await authClient.post("/merchant/auth/login2", { moduleId: 3 }, { headers: testHeaders });
+        return { success: true, session: currentSession, headers: testHeaders };
+      }
+    } catch (err) {
+      sessionId = "";
+    }
+  }
+
+  // 2. 真正执行账号密码登录
+  if (!sessionId) {
+    console.log("🔐 [鉴权服务] 正在执行自动登录...");
+    if (!account || !password) {
+      return { success: false, msg: "未配置主账号或密码，请前往系统设置填写" };
+    }
+
+    try {
+      const r1 = await authClient.post("/merchant/auth/login1", {
+        email: account,
+        password: password,
+        rememberMe: true,
+      });
+
+      const setCookie = r1.headers["set-cookie"];
+      if (!setCookie) throw new Error("未获取到 Cookie 信息");
+
+      sessionId = setCookie
+        .find((s) => s.startsWith("ocpx_session_id="))
+        .split(";")[0]
+        .split("=")[1];
+
+      await authClient.post(
+        "/merchant/auth/login2",
+        { moduleId: 3 },
+        { headers: { cookie: `ocpx_session_id=${sessionId}` } }
+      );
+
+      const newSession = { token: sessionId, time: Date.now() };
+      const newHeaders = {
+        authorization: sessionId,
+        cookie: `ocpx_session_id=${sessionId}`,
+      };
+
+      console.log("✅ [鉴权服务] 账号密码自动登录成功！");
+      return { success: true, session: newSession, headers: newHeaders };
+    } catch (err) {
+      console.error("❌ [鉴权服务] 登录失败:", err.message);
+      return { success: false, msg: `登录失败: ${err.message}` };
+    }
+  }
+}
+
 // 👇 改用 ES Module 导出
 export {
   rootDir,
@@ -383,6 +485,9 @@ export {
   recordTaskStatus,
   saveData,
   getDateRangeByType,
-  getCachedAccounts, // 🌟 新增导出
-  clearAccountsCache, // 🌟 新增导出
+  getCachedAccounts,
+  clearAccountsCache,
+  getTodayString, // 🌟 新增
+  sleep,           // 🌟 新增
+  ensureAuth
 };
