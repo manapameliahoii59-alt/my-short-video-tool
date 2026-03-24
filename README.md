@@ -19,31 +19,9 @@
    - 素材配置
    - 项目数 / 广告数 / 账号数等
 ##### 演示图
-<table>
-  <tr>
-    <td>
-      <img src="https://github.com/user-attachments/assets/3be4a4e6-695c-462f-a808-6aa510b24cc6" width="400"/>
-    </td>
-    <td>
-      <img src="https://github.com/user-attachments/assets/b1927a3f-c495-4950-bfa4-a9ce4f7237c3" width="400"/>
-    </td>
-  </tr>
-  <tr>
-    <td>
-      <img src="https://github.com/user-attachments/assets/22f52374-8837-4ad2-8db1-bd81d9a701b8" width="400"/>
-    </td>
-    <td>
-      <img src="https://github.com/user-attachments/assets/b000f504-9e6d-40bb-a86e-752b23d01a84" width="400"/>
-    </td>
-  </tr>
-  <tr>
-         <td>
-      <img src="[https://github.com/user-attachments/assets/22f52374-8837-4ad2-8db1-bd81d9a701b8](https://github.com/user-attachments/assets/07a69852-1ba3-4c7e-9ba4-b256393162d8)" width="400"/>
-    </td>
-    <td>
-      <img src="https://github.com/user-attachments/assets/a15940d5-9f63-40c7-ad24-d93dd2be7fc6" width="500"/>
-    </td>
-  </tr>
-</table>
+<img src="https://github.com/user-attachments/assets/25fa56d2-f48c-4620-8e0e-3e6236a33805" width="48%">	<img src="https://github.com/user-attachments/assets/3c1b047f-b762-4902-96bb-91a170dfcb68" width="48%">
+<img src="https://github.com/user-attachments/assets/2b160be1-1fb9-4c0e-8219-8f05f27a1af7" width="48%">	<img src="https://github.com/user-attachments/assets/6329f062-eb0d-49f2-a905-c7bd81a0b717" width="48%">
+<img src="https://github.com/user-attachments/assets/2fabd8aa-8270-4727-8a1e-e11e4713a1f4" width="48%">	<img src="https://github.com/user-attachments/assets/d2cfb2da-e413-4338-b8fa-ac32c70942bc" width="48%">
+
 
 
