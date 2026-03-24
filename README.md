@@ -1,34 +1,28 @@
-# comedyapplication
+本项目是一款基于 AI 辅助开发的桌面工具（主要使用 Gemini + Cursor + GPT），用于提升信息流短剧投放效率。
+该工具面向信息流投放场景，提供高度定制化能力，核心目标是：
+    1.自动化投放流程
+    2.自动检测高 ROI 短剧并快速上剧
+适用于：
+- 短剧投放团队
+- 信息流广告优化师
+- 高 ROI 投放策略自动化场景
+主要解决以下问题：
+    1.投手需要长时间人工筛选高 ROI 短剧
+    2.上剧流程繁琐、重复操作多
+使用本工具，只需几分钟即可完成剧单导入与 ROI 方案配置，相比传统手动搭建投放流程或导表操作，效率可提升约 50 倍。
 
-An Electron application with Vue
-
-## Recommended IDE Setup
-
-- [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar)
-
-## Project Setup
-
-### Install
-
-```bash
-$ npm install
-```
-
-### Development
-
-```bash
-$ npm run dev
-```
-
-### Build
-
-```bash
-# For windows
-$ npm run build:win
-
-# For macOS
-$ npm run build:mac
-
-# For Linux
-$ npm run build:linux
-```
+功能
+    1.支持批量短剧 + 批量 ROI 方案一键上剧
+    2.自动巡航检测高 ROI 短剧/漫剧，并自动执行预设投放策略
+    3.ROI 方案集中管理，支持云备份与一键恢复，方便多设备协作
+    4.支持多维参数配置，灵活扩展投放能力，例如：
+        IAP / IAA 模式
+        素材配置
+        项目数 / 广告数 / 账号数等
+演示图
+c0c59dd597a1106cc4b2835800cc2ba.png
+331dd10fe44bc96a470995cade48b57.png
+17ec743b4bccfb9f1d608952b305d2e.png
+8fed2812d7ce54e545fcd0fe51b6544.png
+0b97341a3b6bed2a9f00d570935adbb.png
+cf4ee95ccb04cf30629c2855c4114f0.png
