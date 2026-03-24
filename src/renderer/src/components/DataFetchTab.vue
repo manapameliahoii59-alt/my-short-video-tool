@@ -349,7 +349,7 @@ import { ElMessage } from "element-plus";
 // 🌟 引入 Tickets（清单图标）和 DocumentDelete
 import { Loading, ArrowRight, Timer, Tickets, DocumentDelete } from "@element-plus/icons-vue";
 
-const props = defineProps(["allProfiles"]);
+const props = defineProps(["allProfiles", "profileOrder"]);
 const emit = defineEmits(["cruise-status-change"]); 
 
 const isFetching = ref(false);
@@ -401,9 +401,16 @@ const exportConfig = ref({
 
 const groupedProfilesForSelect = computed(() => {
   if (!props.allProfiles) return [];
+  const orderedNames = Array.isArray(props.profileOrder) && props.profileOrder.length > 0
+    ? props.profileOrder.filter(name => props.allProfiles[name])
+    : Object.keys(props.allProfiles);
+  const names = [
+    ...orderedNames,
+    ...Object.keys(props.allProfiles).filter(name => !orderedNames.includes(name)),
+  ];
   const groupsMap = new Map();
   groupsMap.set("默认分组", []);
-  Object.keys(props.allProfiles).forEach(name => {
+  names.forEach(name => {
     const groupName = props.allProfiles[name].group || "默认分组";
     if (!groupsMap.has(groupName)) {
       groupsMap.set(groupName, []);
@@ -420,7 +427,15 @@ const groupedProfilesForSelect = computed(() => {
 });
 
 const selectAllProfiles = () => {
-  if (props.allProfiles) selectedProfiles.value = Object.keys(props.allProfiles);
+  if (props.allProfiles) {
+    const orderedNames = Array.isArray(props.profileOrder) && props.profileOrder.length > 0
+      ? props.profileOrder.filter(name => props.allProfiles[name])
+      : Object.keys(props.allProfiles);
+    selectedProfiles.value = [
+      ...orderedNames,
+      ...Object.keys(props.allProfiles).filter(name => !orderedNames.includes(name)),
+    ];
+  }
 };
 
 const removeSelectedProfile = (name) => {
@@ -443,6 +458,49 @@ const validateNumber = (key, defaultVal) => {
   let val = parseInt(exportConfig.value[key]);
   if (isNaN(val) || val <= 0) val = defaultVal;
   exportConfig.value[key] = val.toString();
+};
+
+const normalizeDramaName = (name) => {
+  return String(name || "")
+    .trim()
+    .replace(/\u3000/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+};
+
+const parseRoiValue = (roi) => {
+  if (typeof roi === "number") return Number.isFinite(roi) ? roi : -Infinity;
+  const raw = String(roi ?? "").trim();
+  if (!raw) return -Infinity;
+
+  // 兼容 "1.23" / "123%" / "ROI: 1.23" 等格式
+  const match = raw.match(/-?\d+(\.\d+)?/);
+  if (!match) return -Infinity;
+  const value = parseFloat(match[0]);
+  return Number.isFinite(value) ? value : -Infinity;
+};
+
+const dedupeDramasByBookName = (list = []) => {
+  const bestByName = new Map();
+
+  list.forEach((item) => {
+    const normalizedName = normalizeDramaName(item?.bookName);
+    if (!normalizedName) return;
+
+    const currentBest = bestByName.get(normalizedName);
+    if (!currentBest) {
+      bestByName.set(normalizedName, item);
+      return;
+    }
+
+    const currentRoi = parseRoiValue(currentBest?.roi);
+    const nextRoi = parseRoiValue(item?.roi);
+    if (nextRoi > currentRoi) {
+      bestByName.set(normalizedName, item);
+    }
+  });
+
+  return Array.from(bestByName.values());
 };
 
 const startDurationTimer = () => {
@@ -519,12 +577,15 @@ onMounted(async () => {
       loadingText.value = `🚀 正在检索 [${data.dateRange}] 的数据，已抓取 ${data.count} 条 (共 ${data.total} 条) ...可随时点击中止`;
     } 
     else if (data.type === 'data') {
-      goodDramas.value = data.list;
+      const dedupedList = dedupeDramasByBookName(data.list);
+      goodDramas.value = dedupedList;
       if (isAutoRunning.value) {
-        currentBatch.value = data.list;
+        currentBatch.value = dedupedList;
         // 🌟 核心拦截：一旦有新剧正在被上，就把它追加到已发记录列表里，让计数器自动上涨
-        data.list.forEach(item => {
-          if (!todayPublishedList.value.includes(item.bookName)) {
+        dedupedList.forEach(item => {
+          const normalizedName = normalizeDramaName(item.bookName);
+          const existed = todayPublishedList.value.some(name => normalizeDramaName(name) === normalizedName);
+          if (!existed) {
             todayPublishedList.value.push(item.bookName);
           }
         });
@@ -592,8 +653,9 @@ const handleManualFetch = async () => {
   try {
     const res = await window.api.fetchGoodDramas(finalParams);
     if (res.success) {
-      goodDramas.value = res.data;
-      ElMessage.success(`抓取成功！发现 ${res.data.length} 部漫剧`);
+      const dedupedList = dedupeDramasByBookName(res.data);
+      goodDramas.value = dedupedList;
+      ElMessage.success(`抓取成功！发现 ${dedupedList.length} 部漫剧`);
     } else if (res.msg === 'CANCELLED') {
       ElMessage.warning("已成功中止抓取！");
     } else {
@@ -699,7 +761,7 @@ const toggleAutoRun = () => {
 
 .elevate-controls {
   position: relative;
-  z-index: 1000; 
+  z-index: 9999; 
   background: transparent;
 }
 
@@ -718,7 +780,7 @@ const toggleAutoRun = () => {
   font-size: 13px;
   color: #303133;
   font-weight: bold;
-  margin-bottom: 8px;
+  margin: 10px 0px;
 }
 
 .desc-light {

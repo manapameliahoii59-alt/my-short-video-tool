@@ -150,7 +150,7 @@ import {
 } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 
-const props = defineProps(["allProfiles", "logs", "globalDramaList", "isRunning"]);
+const props = defineProps(["allProfiles", "profileOrder", "logs", "globalDramaList", "isRunning"]);
 const emit = defineEmits(["run-task", "clear-logs", "update-global-drama"]);
 
 const isStopping = ref(false);
@@ -163,12 +163,19 @@ const form = reactive({ action: "publish" });
 // 将所有方案按分组重新整理，供下拉框使用
 const groupedProfilesForSelect = computed(() => {
   if (!props.allProfiles) return [];
+  const orderedNames = Array.isArray(props.profileOrder) && props.profileOrder.length > 0
+    ? props.profileOrder.filter(name => props.allProfiles[name])
+    : Object.keys(props.allProfiles);
+  const names = [
+    ...orderedNames,
+    ...Object.keys(props.allProfiles).filter(name => !orderedNames.includes(name)),
+  ];
   
   const groupsMap = new Map();
   // 保证“默认分组”排第一
   groupsMap.set("默认分组", []);
 
-  Object.keys(props.allProfiles).forEach(name => {
+  names.forEach(name => {
     const groupName = props.allProfiles[name].group || "默认分组";
     if (!groupsMap.has(groupName)) {
       groupsMap.set(groupName, []);
@@ -278,7 +285,13 @@ const downloadTemplate = async () => {
 
 const selectAllProfiles = () => {
   if (props.allProfiles) {
-    selectedProfiles.value = Object.keys(props.allProfiles);
+    const orderedNames = Array.isArray(props.profileOrder) && props.profileOrder.length > 0
+      ? props.profileOrder.filter(name => props.allProfiles[name])
+      : Object.keys(props.allProfiles);
+    selectedProfiles.value = [
+      ...orderedNames,
+      ...Object.keys(props.allProfiles).filter(name => !orderedNames.includes(name)),
+    ];
   }
 };
 

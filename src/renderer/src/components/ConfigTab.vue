@@ -395,8 +395,23 @@ import {
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox, ElLoading } from "element-plus";
 
-const props = defineProps(["allProfiles", "userKey"]);
+const props = defineProps(["allProfiles", "profileOrder", "userKey"]);
 const emit = defineEmits(["update-profiles"]);
+
+const buildNextOrder = (profiles, preferredOrder = null) => {
+  const existed = Array.isArray(preferredOrder) && preferredOrder.length > 0
+    ? preferredOrder.filter(name => profiles[name])
+    : [];
+  const leftovers = Object.keys(profiles).filter(name => !existed.includes(name));
+  return [...existed, ...leftovers];
+};
+
+const emitProfilesUpdate = (profiles, preferredOrder = null) => {
+  emit("update-profiles", {
+    profiles,
+    profileOrder: buildNextOrder(profiles, preferredOrder || props.profileOrder),
+  });
+};
 
 // --- 基础状态 ---
 const localSelectedName = ref("");
@@ -493,7 +508,7 @@ const handleCloudDownload = async () => {
       const res = await window.api.cloudGet(props.userKey);
       if (res.status === "ok") {
         manualEmptyGroups.value = new Set(["默认分组"]);
-        emit("update-profiles", res.data);
+        emitProfilesUpdate(res.data, Object.keys(res.data || {}));
         initNewProfile();
         nextTick(() => {
           const s = getSnapshotString(res.data, manualEmptyGroups.value);
@@ -513,7 +528,11 @@ const existingGroups = computed(() => {
 });
 
 const groupedProfiles = computed(() => {
-  const keys = Object.keys(props.allProfiles);
+  const orderedKeys = Array.isArray(props.profileOrder) && props.profileOrder.length > 0
+    ? props.profileOrder.filter(name => props.allProfiles[name])
+    : Object.keys(props.allProfiles);
+  const extraKeys = Object.keys(props.allProfiles).filter(name => !orderedKeys.includes(name));
+  const keys = [...orderedKeys, ...extraKeys];
   let filteredKeys = keys;
   if (searchKeyword.value) filteredKeys = keys.filter(n => n.toLowerCase().includes(searchKeyword.value.toLowerCase()));
   const rawGroups = new Map();
@@ -582,7 +601,7 @@ const confirmDeleteGroup = async () => {
       }
     }
     manualEmptyGroups.value.delete(gName);
-    if (changed) emit("update-profiles", profiles);
+    if (changed) emitProfilesUpdate(profiles);
     showDeleteGroupDialog.value = false;
     ElMessage.success("分组处理完毕");
   } catch (e) { ElMessage.error(e.message); } finally { isDeletingGroup.value = false; }
@@ -605,7 +624,7 @@ const confirmBatchMove = () => {
   const p = JSON.parse(JSON.stringify(props.allProfiles));
   batchSelected.value.forEach(n => { if (p[n]) p[n].group = batchTargetGroup.value; });
   manualEmptyGroups.value.add(batchTargetGroup.value);
-  emit("update-profiles", p);
+  emitProfilesUpdate(p);
   if (batchSelected.value.has(localSelectedName.value)) editingForm.group = batchTargetGroup.value;
   isBatchMode.value = false;
   showBatchMoveDialog.value = false;
@@ -624,11 +643,14 @@ const selectProfile = (n) => {
 };
 
 const deleteProfileName = (n) => {
-  ElMessageBox.confirm(`确定删除方案 [${n}] 吗？`, "警告", { type: "warning" }).then(async () => {
+  ElMessageBox.confirm(`确定删除方案 [${n}] 吗？`, "警告", { type: "warning",
+  confirmButtonText: '确定',
+  cancelButtonText: '取消',
+   }).then(async () => {
     await window.api.deleteProfileFolder(n);
     const p = { ...props.allProfiles };
     delete p[n];
-    emit("update-profiles", p);
+    emitProfilesUpdate(p);
     if (localSelectedName.value === n) initNewProfile();
   }).catch(() => {});
 };
@@ -648,7 +670,7 @@ const handleDropItem = (targetN, e) => {
   const toIdx = keys.indexOf(targetN);
   keys.splice(toIdx, 0, draggingProfileName);
   const newP = {}; keys.forEach(k => newP[k] = p[k]);
-  emit("update-profiles", newP);
+  emitProfilesUpdate(newP, keys);
   draggingProfileName = null;
 };
 const handleDragOverGroup = (e) => { e.dataTransfer.dropEffect = "move"; e.currentTarget.classList.add("drag-over-group"); };
@@ -658,7 +680,7 @@ const handleGroupDrop = (gName, e) => {
   if (!draggingProfileName) return;
   const p = JSON.parse(JSON.stringify(props.allProfiles));
   p[draggingProfileName].group = gName;
-  emit("update-profiles", p);
+  emitProfilesUpdate(p);
   if (collapsedGroups.value.has(gName)) { const s = new Set(collapsedGroups.value); s.delete(gName); collapsedGroups.value = s; }
   draggingProfileName = null;
 };
@@ -689,9 +711,44 @@ const handleMainSave = async () => {
       }
     }
     const p = JSON.parse(JSON.stringify(props.allProfiles));
-    if (localSelectedName.value && localSelectedName.value !== nName) delete p[localSelectedName.value];
-    p[nName] = { ...editingForm, files: finalFiles };
-    emit("update-profiles", p);
+    const oldName = localSelectedName.value;
+    const creatingNew = !oldName || !Object.prototype.hasOwnProperty.call(p, oldName);
+    const newProfileData = { ...editingForm, files: finalFiles };
+    const baseOrder = Array.isArray(props.profileOrder) && props.profileOrder.length > 0
+      ? props.profileOrder.filter(name => p[name])
+      : Object.keys(p);
+
+    // 仅在“编辑且改名”时保留原顺序；新建仍按末尾追加
+    if (!creatingNew && oldName !== nName) {
+      const keys = [...baseOrder];
+      const oldIndex = keys.indexOf(oldName);
+      const newP = {};
+      const newOrder = [];
+      keys.forEach((k, idx) => {
+        if (idx === oldIndex) {
+          newP[nName] = newProfileData;
+          newOrder.push(nName);
+        } else if (k !== oldName) {
+          newP[k] = p[k];
+          newOrder.push(k);
+        }
+      });
+      emitProfilesUpdate(newP, newOrder);
+    } else {
+      // 显式重建顺序：已有方案保持原顺序，新建永远追加到末尾
+      const keys = [...baseOrder];
+      const newP = {};
+      const newOrder = [];
+      keys.forEach((k) => {
+        if (k !== nName) {
+          newP[k] = p[k];
+          newOrder.push(k);
+        }
+      });
+      newP[nName] = newProfileData;
+      newOrder.push(nName);
+      emitProfilesUpdate(newP, newOrder);
+    }
     
     // 🌟 修改点 2：保存成功后，更新“上一次保存分组”的变量
     lastSavedGroup.value = editingForm.group;

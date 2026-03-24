@@ -526,8 +526,15 @@ app.whenReady().then(() => {
     }
   });
 
-  ipcMain.on("update-profiles", (event, profiles) => {
-    userData.profiles = profiles;
+  ipcMain.on("update-profiles", (event, payload) => {
+    if (payload && typeof payload === "object" && payload.profiles) {
+      userData.profiles = payload.profiles;
+      userData.profileOrder = Array.isArray(payload.profileOrder) ? payload.profileOrder : Object.keys(payload.profiles || {});
+    } else {
+      // 兼容旧版：仅传 profiles 对象
+      userData.profiles = payload || {};
+      userData.profileOrder = Object.keys(userData.profiles || {});
+    }
     saveUserData();
   });
 

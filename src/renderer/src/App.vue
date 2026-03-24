@@ -51,6 +51,7 @@
           v-if="currentTab === 'run'"
           :is-running="isRunning"
           :all-profiles="allProfiles"
+          :profile-order="profileOrder"
           :logs="logs"
           :global-drama-list="settings.globalDramaList"
           @update-global-drama="
@@ -66,12 +67,14 @@
         <DataFetchTab
           v-if="currentTab === 'dataFetch'"
           :all-profiles="allProfiles"
+          :profile-order="profileOrder"
           @cruise-status-change="(status) => isCruiseRunning = status"
         />
 
         <ConfigTab
           v-if="currentTab === 'config'"
           :all-profiles="allProfiles"
+          :profile-order="profileOrder"
           :user-key="settings.userKey"
           @update-profiles="updateProfiles"
         />
@@ -171,6 +174,7 @@ import DataFetchTab from "./components/DataFetchTab.vue";
 const currentTab = ref("run");
 const logs = ref([]);
 const allProfiles = ref({});
+const profileOrder = ref([]);
 const settings = ref({
   userKey: "",
   workingAccount: "",
@@ -276,6 +280,7 @@ onMounted(() => {
     console.log("📖 收到初始化数据:", data);
 
     if (data.profiles) allProfiles.value = data.profiles;
+    profileOrder.value = Array.isArray(data.profileOrder) ? data.profileOrder : Object.keys(data.profiles || {});
     if (data.lastConfig) lastConfig.value = data.lastConfig;
 
     settings.value = {
@@ -411,9 +416,21 @@ const handleSaveGlobalSettings = (data) => {
 /**
  * 更新方案列表
  */
-const updateProfiles = (newProfiles) => {
-  allProfiles.value = newProfiles;
-  window.api.updateProfiles(JSON.parse(JSON.stringify(newProfiles)));
+const updateProfiles = (payload) => {
+  const normalizedProfiles = payload?.profiles || payload || {};
+  const normalizedOrder = Array.isArray(payload?.profileOrder)
+    ? payload.profileOrder
+    : Object.keys(normalizedProfiles);
+  allProfiles.value = normalizedProfiles;
+  profileOrder.value = normalizedOrder;
+  window.api.updateProfiles(
+    JSON.parse(
+      JSON.stringify({
+        profiles: normalizedProfiles,
+        profileOrder: normalizedOrder,
+      }),
+    ),
+  );
 };
 
 /**
