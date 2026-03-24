@@ -17,29 +17,29 @@
       </div>
       
       <div
-        :class="['nav-item', { active: currentTab === 'run' }]"
-        @click="currentTab = 'run'"
+        :class="['nav-item', { active: currentTab === 'run', 'is-locked': isCruiseRunning && currentTab !== 'run' }]"
+        @click="handleTabSwitch('run')"
       >
         <el-icon><VideoPlay /></el-icon> 运行任务
       </div>
       
       <div
         :class="['nav-item', { active: currentTab === 'dataFetch' }]"
-        @click="currentTab = 'dataFetch'"
+        @click="handleTabSwitch('dataFetch')"
       >
-        <el-icon><DataLine /></el-icon> 爆款抓取
+        <el-icon><DataLine /></el-icon> 巡航任务
       </div>
 
       <div
-        :class="['nav-item', { active: currentTab === 'config' }]"
-        @click="currentTab = 'config'"
+        :class="['nav-item', { active: currentTab === 'config', 'is-locked': isCruiseRunning && currentTab !== 'config' }]"
+        @click="handleTabSwitch('config')"
       >
         <el-icon><Setting /></el-icon> 方案配置
       </div>
       
       <div
-        :class="['nav-item', { active: currentTab === 'settings' }]"
-        @click="currentTab = 'settings'"
+        :class="['nav-item', { active: currentTab === 'settings', 'is-locked': isCruiseRunning && currentTab !== 'settings' }]"
+        @click="handleTabSwitch('settings')"
       >
         <el-icon><Tools /></el-icon> 系统设置
       </div>
@@ -66,6 +66,7 @@
         <DataFetchTab
           v-if="currentTab === 'dataFetch'"
           :all-profiles="allProfiles"
+          @cruise-status-change="(status) => isCruiseRunning = status"
         />
 
         <ConfigTab
@@ -157,7 +158,6 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
-// 🌟 核心：引入 DataLine 图标
 import { VideoPlay, Setting, Tools, Loading, DataLine } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
@@ -165,7 +165,6 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import RunTab from "./components/RunTab.vue";
 import ConfigTab from "./components/ConfigTab.vue";
 import SettingsTab from "./components/SettingsTab.vue";
-// 🌟 核心：引入新写的抓取页面组件
 import DataFetchTab from "./components/DataFetchTab.vue"; 
 
 // --- 全局状态管理 ---
@@ -186,6 +185,9 @@ const lastConfig = ref({});
 const appVersion = ref("1.0.0"); 
 const isRunning = ref(false);
 
+// 🌟 新增：记录巡航状态，用于锁定页面
+const isCruiseRunning = ref(false); 
+
 // --- 更新状态管理 ---
 const isDownloading = ref(false); 
 const downloadPercent = ref(0); 
@@ -200,6 +202,15 @@ const preventDefaultDrop = (e) => {
   e.preventDefault();
 };
 
+// 🌟 新增：统一处理 Tab 切换的拦截函数
+const handleTabSwitch = (tabName) => {
+  if (isCruiseRunning.value && tabName !== 'dataFetch') {
+    ElMessage.warning("🛑 自动巡航及上剧引擎正在后台运行中，请先停止巡航后再切换页面！");
+    return;
+  }
+  currentTab.value = tabName;
+};
+
 /**
  * 获取动态更新日志
  */
@@ -209,6 +220,7 @@ const fetchUpdateLog = async (version) => {
     const res = await fetch(
       `http://129.204.86.63:3535/api/changelog.json?t=${Date.now()}`,
     );
+
 
     if (res.ok) {
       const allLogs = await res.json();
@@ -225,10 +237,10 @@ const fetchUpdateLog = async (version) => {
     }
   } catch (error) {
     console.error("获取更新日志失败:", error);
-    updateContent.value = [
-      "✨ 优化了系统核心机制，执行效率大幅提升",
-      "🛡️ 强化了 API 请求的安全防护策略",
-    ];
+    // updateContent.value = [
+    //   "✨ 优化了系统核心机制，执行效率大幅提升",
+    //   "🛡️ 强化了 API 请求的安全防护策略",
+    // ];
   } finally {
     isLoadingLog.value = false;
   }
@@ -482,6 +494,13 @@ nav {
 .nav-item.active {
   background-color: #409eff;
   color: white;
+}
+
+/* 🌟 新增：锁定的菜单项样式 */
+.nav-item.is-locked {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background-color: transparent !important;
 }
 
 main {

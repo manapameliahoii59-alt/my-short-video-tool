@@ -2,11 +2,11 @@
   <div 
     class="fetch-container" 
     v-loading="isFetching" 
-    element-loading-text="🚀 正在全网检索爆款数据，可随时点击中止..."
+    :element-loading-text="loadingText"
   >
       <el-card shadow="never" class="data-card" style="height: 300px;display: flex; flex-direction: column;">
       <div class="group-desc" style="margin-bottom: 12px; font-size: 14px;">
-        🤖 自动化上剧目标方案 <span class="desc-light">(勾选后，后台巡航抓取到爆款时，将自动为您分发到以下选中方案)</span>
+        🤖 自动化上剧目标方案 <span class="desc-light">(勾选后，后台巡航抓取到漫剧时，将自动为您分发到以下选中方案)</span>
       </div>
       
       <div class="profile-select-section">
@@ -85,6 +85,18 @@
           <div class="filter-container">
             <div class="setting-row">
               <span class="row-label">🔍 抓取过滤：</span>
+              
+              <el-date-picker
+                v-model="fetchDateRange"
+                type="daterange"
+                range-separator="至"
+                start-placeholder="开始日期"
+                end-placeholder="结束日期"
+                value-format="YYYY-MM-DD"
+                :disabled="isAutoRunning"
+                :clearable="false"
+              />
+
               <el-select 
                 v-model="fetchParams.source" 
                 placeholder="平台 (默认全选)" 
@@ -197,7 +209,7 @@
     <el-dialog v-model="showTableDialog" width="75%" top="8vh" destroy-on-close :show-close="false">
       <template #header="{ close }">
         <div style="display: flex; justify-content: space-between; align-items: center;">
-          <span style="font-size: 16px; font-weight: bold;">👀 爆款剧单抓取结果</span>
+          <span style="font-size: 16px; font-weight: bold;">👀 漫剧剧单抓取结果</span>
           <div>
             <el-button type="danger" size="small" plain @click="clearDramasResult" style="margin-right: 15px;">
               🗑️ 清空结果
@@ -209,23 +221,68 @@
 
       <el-table :data="goodDramas" border stripe height="500px" size="small">
         <el-table-column type="index" label="序号" width="60" align="center" />
-        <el-table-column prop="bookName" label="爆款剧名" min-width="200" />
+        <el-table-column prop="bookName" label="剧名" min-width="200" />
         <el-table-column prop="roi" label="今日 ROI (首日)" width="120" align="center">
           <template #default="scope">
             <el-tag type="danger" effect="dark" round size="small">{{ scope.row.roi }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="cost" label="消耗金额" width="100" align="center" />
-        <el-table-column prop="fetchTime" label="发现时间" width="140" align="center" />
+        <el-table-column prop="fetchTime" label="检索时间" width="140" align="center" />
       </el-table>
+    </el-dialog>
+
+    <el-dialog v-model="showPublishedDialog" title="📅 今日全网防重已发剧单" top="4vh" width="500px" append-to-body destroy-on-close>
+      <div v-if="todayPublishedList.length === 0" style="text-align: center; padding: 40px 0; color: #909399;">
+        <el-icon size="40"><DocumentDelete /></el-icon>
+        <div style="margin-top: 10px;">今日暂无上剧记录，配额充足</div>
+      </div>
+      
+      <div v-else>
+        <div style="margin-bottom: 10px; color: #666; font-size: 13px;">
+          💡 记录当前卡密在所有设备上今日已成功分发的漫剧
+        </div>
+        <el-table 
+          :data="todayPublishedList.map((name, index) => ({ id: index + 1, name }))" 
+          border 
+          stripe 
+          max-height="450px" 
+          size="small"
+          :header-cell-style="{ background: '#f5f7fa', color: '#606266' }"
+        >
+          <el-table-column prop="id" label="序号" width="70" align="center" />
+          <el-table-column prop="name" label="已发剧名" min-width="200" />
+          <el-table-column label="状态" width="100" align="center">
+            <template #default>
+              <el-tag type="success" size="small" effect="plain">已拦截</el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div style="margin-top: 15px; text-align: right; color: #999; font-size: 12px;">
+          共计：{{ todayPublishedList.length }} 部
+        </div>
+      </div>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button type="primary" @click="showPublishedDialog = false">关闭窗口</el-button>
+        </span>
+      </template>
     </el-dialog>
 
     <transition name="fade">
       <div v-if="isAutoRunning" class="cruise-overlay">
         <div class="cruise-panel">
-          <div class="cp-header">
-            <div class="radar-spinner"></div>
-            <h2 style="margin: 0; color: #303133; letter-spacing: 1px;">自动巡航及上剧引擎运行中</h2>
+          <div class="cp-header" style="justify-content: space-between; width: 100%;">
+            <div style="display: flex; align-items: center; gap: 15px;">
+              <div class="radar-spinner"></div>
+              <h2 style="margin: 0; color: #303133; letter-spacing: 1px;">自动巡航及上剧引擎运行中</h2>
+            </div>
+            
+            <el-button type="primary" plain round @click="showPublishedDialog = true">
+              <el-icon style="margin-right: 4px;"><Tickets /></el-icon> 
+              今日已发 ({{ todayPublishedList.length }})
+            </el-button>
           </div>
           
           <div class="cp-time">
@@ -245,7 +302,7 @@
             <el-icon class="step-arrow"><ArrowRight /></el-icon>
             <div class="cp-step" :class="{ active: currentPhase === 'fetching' }">
               <el-icon v-if="currentPhase === 'fetching'" class="is-loading"><Loading /></el-icon>
-              2. 雷达检索爆款
+              2. 雷达检索cbo漫剧
             </div>
             <el-icon class="step-arrow"><ArrowRight /></el-icon>
             <div class="cp-step" :class="{ active: currentPhase === 'publishing' }">
@@ -287,11 +344,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, computed, watch } from "vue";
 import { ElMessage } from "element-plus";
-import { Loading, ArrowRight, Timer } from "@element-plus/icons-vue"; 
+// 🌟 引入 Tickets（清单图标）和 DocumentDelete
+import { Loading, ArrowRight, Timer, Tickets, DocumentDelete } from "@element-plus/icons-vue";
 
 const props = defineProps(["allProfiles"]);
+const emit = defineEmits(["cruise-status-change"]); 
 
 const isFetching = ref(false);
 const isAutoRunning = ref(false);
@@ -299,20 +358,38 @@ const intervalMin = ref(30);
 const goodDramas = ref([]);
 
 const showTableDialog = ref(false);
-const selectedProfiles = ref([]); 
+const selectedProfiles = ref([]);
+
+// 🌟 新增状态：控制已发剧单的弹窗和列表数据
+const showPublishedDialog = ref(false);
+const todayPublishedList = ref([]);
+
+const loadingText = ref("🚀 正在检索cbo漫剧数据，请稍候...");
 
 // 巡航控制台状态
-const currentPhase = ref("waiting"); 
-const currentBatch = ref([]); 
+const currentPhase = ref("waiting");
+const currentBatch = ref([]);
 const cruiseStartTime = ref(null);
 const startTimeStr = ref("");
 const cruiseDuration = ref("00:00:00");
 let durationTimer = null;
 
+watch(isAutoRunning, (newVal) => {
+  emit("cruise-status-change", newVal);
+});
+
+const getTodayString = () => {
+  const d = new Date();
+  const t = new Date(d.getTime() - (d.getTimezoneOffset() * 60000));
+  return t.toISOString().split('T')[0];
+};
+
+const fetchDateRange = ref([getTodayString(), getTodayString()]);
+
 const fetchParams = ref({
   carrier: "link",
   copyrightType: "分销",
-  source: "ZZFQ", 
+  source: "ZZFQ",
   linkType: "IAP",
   roiThreshold: "0.7"
 });
@@ -358,13 +435,13 @@ const openProfileFolder = (name) => {
 
 const validateRoi = () => {
   let val = parseFloat(fetchParams.value.roiThreshold);
-  if (isNaN(val) || val < 0) val = 0.7; 
+  if (isNaN(val) || val < 0) val = 0.7;
   fetchParams.value.roiThreshold = val.toString();
 };
 
 const validateNumber = (key, defaultVal) => {
   let val = parseInt(exportConfig.value[key]);
-  if (isNaN(val) || val <= 0) val = defaultVal; 
+  if (isNaN(val) || val <= 0) val = defaultVal;
   exportConfig.value[key] = val.toString();
 };
 
@@ -372,7 +449,7 @@ const startDurationTimer = () => {
   const now = new Date();
   cruiseStartTime.value = now;
   startTimeStr.value = now.toLocaleTimeString();
-  
+
   if (durationTimer) clearInterval(durationTimer);
   durationTimer = setInterval(() => {
     const diff = Math.floor((new Date() - cruiseStartTime.value) / 1000);
@@ -391,14 +468,14 @@ const stopDurationTimer = () => {
   currentBatch.value = [];
 };
 
-// 🌟 新增：保存配置方法
 const handleSaveSettings = async () => {
   validateRoi();
   validateNumber('materialCount', 30);
-  
+
   const payload = {
     fetchParams: JSON.parse(JSON.stringify(fetchParams.value)),
-    exportConfig: JSON.parse(JSON.stringify(exportConfig.value))
+    exportConfig: JSON.parse(JSON.stringify(exportConfig.value)),
+    intervalMin: intervalMin.value
   };
 
   try {
@@ -410,7 +487,6 @@ const handleSaveSettings = async () => {
         ElMessage.error("保存失败: " + res.msg);
       }
     } else {
-      // 如果后端没写这个接口，给个兜底提示
       ElMessage.warning("接口未连接，前端已记录数据 (请在 preload/main 中实现 saveFetchSettings)");
     }
   } catch (err) {
@@ -419,19 +495,16 @@ const handleSaveSettings = async () => {
 };
 
 onMounted(async () => {
-  // --- 1. 🌟 初始化：从云端/本地恢复保存的配置 ---
   try {
     if (window.api && window.api.getFetchSettings) {
       const res = await window.api.getFetchSettings();
       if (res.success && res.data) {
-        // 使用 Object.assign 或解构赋值回填数据，确保不破坏 Vue 的响应式对象结构
         if (res.data.fetchParams) {
           Object.assign(fetchParams.value, res.data.fetchParams);
         }
         if (res.data.exportConfig) {
           Object.assign(exportConfig.value, res.data.exportConfig);
         }
-        // 如果有保存的间隔时间，也可以同步
         if (res.data.intervalMin) {
           intervalMin.value = res.data.intervalMin;
         }
@@ -441,29 +514,55 @@ onMounted(async () => {
     console.error("加载预设配置失败:", e);
   }
 
-  // --- 2. 📡 保持原本的日志监听逻辑 ---
   window.api.onFetchLogUpdate((data) => {
-    if (data.type === 'data') {
-      goodDramas.value = data.list; 
-      if (isAutoRunning.value) currentBatch.value = data.list;
+    if (data.type === 'progress') {
+      loadingText.value = `🚀 正在检索 [${data.dateRange}] 的数据，已抓取 ${data.count} 条 (共 ${data.total} 条) ...可随时点击中止`;
+    } 
+    else if (data.type === 'data') {
+      goodDramas.value = data.list;
+      if (isAutoRunning.value) {
+        currentBatch.value = data.list;
+        // 🌟 核心拦截：一旦有新剧正在被上，就把它追加到已发记录列表里，让计数器自动上涨
+        data.list.forEach(item => {
+          if (!todayPublishedList.value.includes(item.bookName)) {
+            todayPublishedList.value.push(item.bookName);
+          }
+        });
+      }
     } else if (data.type === 'status') {
       isAutoRunning.value = data.isRunning;
-      if (!data.isRunning) stopDurationTimer(); 
+      if (!data.isRunning) stopDurationTimer();
     } else if (data.type === 'error') {
       ElMessage.error(data.msg);
       if (isAutoRunning.value && data.msg.includes('后台巡航抓取失败')) {
         currentPhase.value = 'waiting';
       }
     } else if (data.type === 'success') {
-      ElMessage.success(data.msg);
-      // 根据日志文本智能判断当前所处的自动化阶段
+      
+      // 🌟 核心修改：如果是开局的防重记录单，静默处理，不要在顶部弹窗打扰用户
+      if (!data.msg.includes('📝 [防重记录]')) {
+        ElMessage.success(data.msg); 
+      }
+
+      // 🌟 提取开局初始化的防重列表（拦截主进程发来的提示语）
+      if (data.msg.includes('📝 [防重记录] 今日全网已发剧集')) {
+        try {
+          const rawNames = data.msg.split('): ')[1];
+          if (rawNames) {
+            todayPublishedList.value = rawNames.split('、').map(n => n.trim()).filter(n => n);
+          }
+        } catch(e) {}
+      } else if (data.msg.includes('📝 [防重记录] 经核对，今日全网暂无上剧记录')) {
+        todayPublishedList.value = [];
+      }
+
       if (isAutoRunning.value) {
         if (data.msg.includes('正在按条件执行后台自动巡航')) {
-          currentPhase.value = 'fetching'; 
-        } else if (data.msg.includes('准备触发自动化上剧')) {
-          currentPhase.value = 'publishing'; 
-        } else if (data.msg.includes('本轮爆款跟进任务执行完毕') || data.msg.includes('本次巡航未发现')) {
-          currentPhase.value = 'waiting'; 
+          currentPhase.value = 'fetching';
+        } else if (data.msg.includes('准备触发自动化上剧') || data.msg.includes('将为您自动分发')) { 
+          currentPhase.value = 'publishing';
+        } else if (data.msg.includes('任务执行完毕') || data.msg.includes('本次巡航未发现') || data.msg.includes('跳过上剧')) {
+          currentPhase.value = 'waiting';
         }
       }
     }
@@ -473,16 +572,28 @@ onMounted(async () => {
 const handleManualFetch = async () => {
   validateRoi();
   isFetching.value = true;
-  goodDramas.value = []; 
-  
+  goodDramas.value = [];
+
+  const sDay = fetchDateRange.value?.[0] || getTodayString();
+  const eDay = fetchDateRange.value?.[1] || getTodayString();
+  loadingText.value = `🚀 正在准备拉取 [${sDay} 至 ${eDay}] 的漫剧，建立连接中...`;
+
   const finalParams = JSON.parse(JSON.stringify(fetchParams.value));
   finalParams.roiThreshold = parseFloat(finalParams.roiThreshold);
+
+  if (fetchDateRange.value && fetchDateRange.value.length === 2) {
+    finalParams.startDay = fetchDateRange.value[0];
+    finalParams.endDay = fetchDateRange.value[1];
+  } else {
+    finalParams.startDay = getTodayString();
+    finalParams.endDay = getTodayString();
+  }
 
   try {
     const res = await window.api.fetchGoodDramas(finalParams);
     if (res.success) {
       goodDramas.value = res.data;
-      ElMessage.success(`抓取成功！发现 ${res.data.length} 部爆款剧`);
+      ElMessage.success(`抓取成功！发现 ${res.data.length} 部漫剧`);
     } else if (res.msg === 'CANCELLED') {
       ElMessage.warning("已成功中止抓取！");
     } else {
@@ -492,11 +603,15 @@ const handleManualFetch = async () => {
     ElMessage.error("系统异常");
   } finally {
     isFetching.value = false;
+    setTimeout(() => {
+      loadingText.value = "🚀 正在全网检索漫剧数据，请稍候...";
+    }, 500);
   }
 };
 
 const cancelFetch = () => {
-  window.api.cancelFetchDramas(); 
+  window.api.cancelFetchDramas();
+  loadingText.value = "🛑 正在请求中止，等待当前页返回...";
   ElMessage.warning("正在请求中止，请稍候...");
 };
 
@@ -509,7 +624,7 @@ const clearDramasResult = () => {
 const handleExportExcel = async () => {
   if (goodDramas.value.length === 0) return;
   validateNumber('materialCount', 30);
-  
+
   try {
     const res = await window.api.exportDramasExcel({
       dramas: JSON.parse(JSON.stringify(goodDramas.value)),
@@ -544,20 +659,28 @@ const toggleAutoRun = () => {
       ElMessage.error("🛑 开启失败！请至少在下方勾选一个【自动化上剧目标方案】");
       return;
     }
+
+    const today = getTodayString();
+    fetchDateRange.value = [today, today];
+    ElMessage.info("已自动将抓取范围锁定为今日数据");
+
     validateRoi();
     validateNumber('materialCount', 30);
-    
+
     ElMessage.success(`已开启后台自动巡航，每 ${intervalMin.value} 分钟执行一次`);
-    
+
     const finalParams = JSON.parse(JSON.stringify(fetchParams.value));
     finalParams.roiThreshold = parseFloat(finalParams.roiThreshold);
 
+    finalParams.startDay = today;
+    finalParams.endDay = today;
+
     startDurationTimer();
-    currentPhase.value = 'fetching'; 
+    currentPhase.value = 'fetching';
     isAutoRunning.value = true;
 
-    window.api.startAutoFetch({ 
-      interval: intervalMin.value, 
+    window.api.startAutoFetch({
+      interval: intervalMin.value,
       ...finalParams,
       exportConfig: JSON.parse(JSON.stringify(exportConfig.value)),
       selectedProfiles: JSON.parse(JSON.stringify(selectedProfiles.value))
@@ -574,14 +697,12 @@ const toggleAutoRun = () => {
   position: relative; 
 }
 
-/* 🌟 防止遮罩挡住手动操作及面板 */
 .elevate-controls {
   position: relative;
-  z-index: 2005; 
+  z-index: 1000; 
   background: transparent;
 }
 
-/* --- 设置区域布局 --- */
 .settings-wrapper {
   display: flex;
   flex-direction: column;
@@ -607,7 +728,6 @@ const toggleAutoRun = () => {
   margin-left: 6px;
 }
 
-/* 🌟 新增：存放两行设置的容器 */
 .filter-container {
   background-color: #fafafa;
   padding: 12px;
@@ -628,7 +748,14 @@ const toggleAutoRun = () => {
   font-size: 13px;
   font-weight: bold;
   color: #606266;
-  width: 120px; /* 保证两行标签对齐 */
+  width: 120px;
+}
+
+:deep(.el-date-editor) {
+  height: 30px;
+}
+:deep(.el-date-editor .el-input__wrapper) {
+  height: 30px;
 }
 
 .filter-item-small {
@@ -636,10 +763,9 @@ const toggleAutoRun = () => {
 }
 
 .filter-item-middle {
-  width: 220px; /* 版权输入框稍微长一点 */
+  width: 220px;
 }
 
-/* 🌟 自定义紧凑型输入框组件 */
 .custom-input-box {
   display: flex;
   align-items: center;
@@ -687,7 +813,6 @@ const toggleAutoRun = () => {
   padding-right: 8px;
 }
 
-/* --- 控制按钮区域 --- */
 .controls-container {
   display: flex;
   flex-direction: column;
@@ -719,7 +844,6 @@ const toggleAutoRun = () => {
   gap: 8px;
 }
 
-/* --- 方案选择区域 --- */
 .data-card :deep(.el-card__body) {
   flex: 1;
   display: flex;
@@ -756,7 +880,16 @@ const toggleAutoRun = () => {
 .selected-tags-box::-webkit-scrollbar { width: 6px; }
 .selected-tags-box::-webkit-scrollbar-thumb { background-color: #dcdfe6; border-radius: 4px; }
 
-/* --- 🌟 自动巡航全屏遮罩层 --- */
+/* 🌟 已发剧单弹窗内标签样式 */
+.published-tags-wrapper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 0;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
 .cruise-overlay {
   position: absolute;
   top: 0;
@@ -766,7 +899,7 @@ const toggleAutoRun = () => {
   background: rgba(255, 255, 255, 0.75);
   backdrop-filter: blur(8px); 
   -webkit-backdrop-filter: blur(8px);
-  z-index: 3000;
+  z-index: 100;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -896,7 +1029,6 @@ const toggleAutoRun = () => {
   margin-top: 10px;
 }
 
-/* 防止 Loading 动画导致按钮抖动 */
 :deep(.el-button.is-loading) {
   animation: none !important;
 }

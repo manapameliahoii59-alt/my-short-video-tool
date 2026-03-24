@@ -28,8 +28,9 @@ let autoFetchTimer = null;
 
 
 
-// --- 🌟 核心：爆款剧单抓取逻辑 (带 Token 鉴权版) ---
-const fetchGoodDramasLogic = async (params) => {
+// --- 🌟 核心：爆款剧单抓取逻辑 (带 Token 鉴权 + 实时进度上报版) ---
+// 新增 sender 参数，用于接收 event.sender 并向前端发送实时状态
+const fetchGoodDramasLogic = async (params, sender = null) => {
   isFetchCancelled = false; // 每次启动前重置
   try {
     // 🌟 1. 自动鉴权：传入账号、密码和当前硬盘存的 session
@@ -52,7 +53,12 @@ const fetchGoodDramasLogic = async (params) => {
     const authHeaders = authRes.headers; // 拿到了可以直接用的 headers!
 
     const today = getTodayString();
-    const { roiThreshold = 0.70, exportConfig, selectedProfiles, interval, ...restParams } = params || {};
+    // 🌟 核心修改 1：从 params 中解构出 startDay 和 endDay
+    const { roiThreshold = 0.70, exportConfig, selectedProfiles, interval, startDay, endDay, ...restParams } = params || {};
+    
+    // 🌟 核心修改 2：如果前端传了日期就用前端的，没传就默认今天兜底
+    const sDay = startDay || today;
+    const eDay = endDay || today;
     let allDramas = []; 
     let currentPage = 1;
     const MAX_PAGE_SIZE = 200; 
@@ -64,13 +70,14 @@ const fetchGoodDramasLogic = async (params) => {
 
     do {
       if (isFetchCancelled) {
-       console.log("🛑 收到中止指令，停止翻页");
-       return { success: false, msg: 'CANCELLED' }; // 直接退出并返回取消状态
-     }
+        console.log("🛑 收到中止指令，停止翻页");
+        return { success: false, msg: 'CANCELLED' }; // 直接退出并返回取消状态
+      }
       const queryObj = {
         bookInfo: '', promotionInfo: '', advertiserInfo: '', cdpProjectInfo: '', cdpPromotionInfo: '',
         bidType: 'NO_BID', linkType: 'IAP', copyrightType: '分销', carrier: 'link',
-        startDay: today, endDay: today,
+        startDay: sDay, // 🌟 核心修改 3：使用传入的开始日期
+        endDay: eDay,   // 🌟 核心修改 4：使用传入的结束日期
         'sortingFields[0].field': 'statCost', 'sortingFields[0].order': 'desc',
         pageNo: currentPage, pageSize: MAX_PAGE_SIZE, ...cleanParams 
       };
@@ -78,7 +85,7 @@ const fetchGoodDramasLogic = async (params) => {
       const searchParams = new URLSearchParams(queryObj).toString();
       const url = `https://api.iocpx.com/adv-report-query/promotionDay/getLatestCostByDay?${searchParams}`;
 
-      console.log(`[抓取中] 日期:${today} | 第 ${currentPage} 页...`);
+      console.log(`[抓取中] 日期:${sDay} 至 ${eDay} | 第 ${currentPage} 页...`);
       
       // 🌟 3. 发起抓取请求，直接塞入自动生成的 authHeaders
       const response = await axios.get(url, { 
@@ -90,13 +97,23 @@ const fetchGoodDramasLogic = async (params) => {
       totalItems = response.data?.data?.total || 0;
       allDramas.push(...list);
 
+      // 🌟🌟🌟 核心修改 5：实时向前端推送抓取进度
+      if (sender) {
+        sender.send("fetch-log-update", {
+          type: 'progress',
+          dateRange: `${sDay} 至 ${eDay}`,
+          count: allDramas.length,
+          total: totalItems
+        });
+      }
+
       if (allDramas.length >= totalItems || list.length === 0) break;
       currentPage++;
       await sleep(1000); 
 
     } while (true);
 
-    console.log(`✅ 抓取结束。今日总条数: ${allDramas.length}`);
+    console.log(`✅ 抓取结束。总条数: ${allDramas.length}`);
 
     const currentTime = new Date().toLocaleTimeString();
     const filteredGoodList = allDramas
@@ -105,10 +122,12 @@ const fetchGoodDramasLogic = async (params) => {
         bookName: item.bookName, roi: item.attributionBillingGameInAppRoi1day,
         cost: item.statCost || 0, fetchTime: currentTime
       }));
-      const testList = filteredGoodList.slice(0, 1);
+    
+    // 注意：这里保留了你原来用于测试的只取第一条的逻辑，如需全量数据记得解开下面的注释
+    // const testList = filteredGoodList.slice(0, 1);
 
-    return { success: true, data: testList, totalProcessed: allDramas.length };
-    // return { success: true, data: filteredGoodList, totalProcessed: allDramas.length };
+    // return { success: true, data: testList, totalProcessed: allDramas.length };
+    return { success: true, data: filteredGoodList, totalProcessed: allDramas.length };
 
   } catch (error) {
     console.error("抓取异常:", error.message);
@@ -240,89 +259,156 @@ app.whenReady().then(() => {
   // ==========================================
 
   ipcMain.handle("fetch-good-dramas", async (event, params) => {
-    return await fetchGoodDramasLogic(params);
+    // 🌟 把 event.sender 传进去，方便底层函数实时向前端推消息
+    return await fetchGoodDramasLogic(params, event.sender);
   });
 
-ipcMain.on("start-auto-fetch", (event, config) => {
+  ipcMain.on("start-auto-fetch", async (event, config) => {
     globalUiSender = event.sender;
     
-    // 每次启动前先清理旧的定时器
     if (autoFetchTimer) clearInterval(autoFetchTimer);
     
     const intervalMs = config.interval * 60 * 1000; 
+    const todayStr = getTodayString();
+    const userKey = userData.KEY_CONFIG?.userKey || "";
 
+    // ==========================================
+    // 🌟 启动时预先播报今日已上剧单
+    // ==========================================
+    let initialCloudList = [];
+    if (userKey) {
+      try {
+        const getUrl = `${BASE_SERVER_URL}/api/daily-record/get?license_key=${userKey.trim()}&date=${todayStr}`;
+        const cloudRes = await axios.get(getUrl, { timeout: 4000 });
+        if (cloudRes.data?.status === 'ok' && cloudRes.data?.data?.list) {
+          initialCloudList = cloudRes.data.data.list;
+        }
+      } catch (e) {
+        console.log("启动时拉取云端记录超时，使用本地缓存");
+      }
+    }
+
+    // 🛡️ 绝对安全的本地初始化校验
+    if (!userData.dailyPublished || userData.dailyPublished.date !== todayStr || !Array.isArray(userData.dailyPublished.list)) {
+      userData.dailyPublished = { date: todayStr, list: [] };
+    }
+
+    const initialMergedSet = new Set([...userData.dailyPublished.list, ...initialCloudList]);
+    const initialMergedArray = Array.from(initialMergedSet);
+    
+    if (initialMergedArray.length > 0) {
+      event.sender.send("fetch-log-update", { 
+        type: 'success', 
+        msg: `📝 [防重记录] 今日全网已发剧集 (${initialMergedArray.length}部): ${initialMergedArray.join('、')}` 
+      });
+    } else {
+      event.sender.send("fetch-log-update", { 
+        type: 'success', 
+        msg: `📝 [防重记录] 经核对，今日全网暂无上剧记录，配额充足！` 
+      });
+    }
+
+    // ==========================================
+    // 🌟 核心巡航逻辑 (带全局崩溃拦截)
+    // ==========================================
     const executeRoutine = async () => {
-      event.sender.send("fetch-log-update", { type: 'success', msg: `[${new Date().toLocaleTimeString()}] 正在按条件执行后台自动巡航...` });
-      
-      const res = await fetchGoodDramasLogic(config);
-      
-      if (res.success && res.data.length > 0) {
-        event.sender.send("fetch-log-update", { type: 'data', list: res.data });
+      // 🛡️ 全局包裹 try...catch，防止任何一行代码报错导致静默死亡
+      try {
+        event.sender.send("fetch-log-update", { type: 'success', msg: `[${new Date().toLocaleTimeString()}] 正在按条件执行后台自动巡航...` });
         
-        try {
-          // 🚀 1. 后台生成一张带预设的 Excel 剧单
+        const res = await fetchGoodDramasLogic(config);
+        
+        if (res.success && res.data.length > 0) {
+          
+          let cloudList = [];
+          if (userKey) {
+            try {
+              const getUrl = `${BASE_SERVER_URL}/api/daily-record/get?license_key=${userKey.trim()}&date=${todayStr}`;
+              const cloudRes = await axios.get(getUrl, { timeout: 4000 });
+              if (cloudRes.data?.status === 'ok' && cloudRes.data?.data?.list) {
+                cloudList = cloudRes.data.data.list;
+              }
+            } catch (e) {
+              console.log("⚠️ 云端拉取超时，降级为本地校验...", e.message);
+            }
+          }
+
+          // 🛡️ 再次确保本地 list 是一个合法数组，绝不报错
+          if (!userData.dailyPublished || userData.dailyPublished.date !== todayStr || !Array.isArray(userData.dailyPublished.list)) {
+            userData.dailyPublished = { date: todayStr, list: [] };
+          }
+
+          const localList = userData.dailyPublished.list;
+          const mergedPublishedSet = new Set([...localList, ...cloudList]);
+          
+          const newDramas = res.data.filter(item => !mergedPublishedSet.has(item.bookName));
+
+          if (newDramas.length === 0) {
+            event.sender.send("fetch-log-update", { 
+              type: 'success', 
+              msg: `[${new Date().toLocaleTimeString()}] 发现 ${res.data.length} 个爆款，经云端核对今日均已分发，防重机制触发，跳过上剧。` 
+            });
+            return; 
+          }
+
+          // 更新记录
+          newDramas.forEach(item => userData.dailyPublished.list.push(item.bookName));
+          saveUserData(); 
+
+          if (userKey) {
+            try {
+              const fullListToUpload = Array.from(new Set([...userData.dailyPublished.list]));
+              await axios.post(`${BASE_SERVER_URL}/api/daily-record/save`, {
+                license_key: userKey.trim(),
+                date: todayStr,
+                list: fullListToUpload
+              }, { timeout: 4000 });
+            } catch (e) {
+              console.log("⚠️ 上传云端失败，但本地已保存。", e.message);
+            }
+          }
+
+          event.sender.send("fetch-log-update", { type: 'data', list: newDramas });
+
+          // 🚀 后台生成 Excel 并触发上剧
           const globalAssetsDir = join(PROFILES_DIR, "global_assets");
           if (!fs.existsSync(globalAssetsDir)) fs.mkdirSync(globalAssetsDir, { recursive: true });
           
           const excelName = `Auto_Dramas_${Date.now()}.xlsx`;
           const excelPath = join(globalAssetsDir, excelName);
 
-          // 🌟 提取前端传过来的预设配置，如果没有则给默认兜底值
           const exportConf = config.exportConfig || { copyright: "ZZ番茄", materialCount: 30 };
-
           const headers = ["版权", "产品ID", "产品名称", "素材名称", "素材个数", "指定素材", "新建项目数", "新建广告数", "素材文件名称"];
           const rows = [headers];
           
-          res.data.forEach(item => {
-            // 🌟 把预设数据填入对应的列里，项目数和广告数默认给 1
+          newDramas.forEach(item => {
             rows.push([
-              exportConf.copyright,        // [0] 版权
-              "",                          // [1] 产品ID
-              item.bookName,               // [2] 产品名称 (剧名)
-              "",                          // [3] 素材名称
-              exportConf.materialCount,    // [4] 素材个数
-              "",                          // [5] 指定素材
-              1,                           // [6] 新建项目数 (写死默认 1)
-              1,                           // [7] 新建广告数 (写死默认 1)
-              ""                           // [8] 素材文件名称
+              exportConf.copyright, "", item.bookName, "", exportConf.materialCount, 
+              "", 1, 1, ""                           
             ]);
           });
 
           const ws = xlsx.utils.aoa_to_sheet(rows);
-          
-          // 🌟 设置列宽，防止剧名太长被折叠看不清
           ws['!cols'] = [
-            { wch: 12 }, // [0] 版权
-            { wch: 12 }, // [1] 产品ID
-            { wch: 35 }, // [2] 产品名称 (⭐加宽)
-            { wch: 15 }, // [3] 素材名称
-            { wch: 10 }, // [4] 素材个数
-            { wch: 15 }, // [5] 指定素材
-            { wch: 12 }, // [6] 新建项目数
-            { wch: 12 }, // [7] 新建广告数
-            { wch: 20 }, // [8] 素材文件名称
+            { wch: 12 }, { wch: 12 }, { wch: 35 }, { wch: 15 }, { wch: 10 },
+            { wch: 15 }, { wch: 12 }, { wch: 12 }, { wch: 20 },
           ];
 
           const wb = xlsx.utils.book_new();
           xlsx.utils.book_append_sheet(wb, ws, "Sheet1");
           xlsx.writeFile(wb, excelPath);
 
-          event.sender.send("fetch-log-update", { type: 'success', msg: `发现 ${res.data.length} 个爆款，已应用预设并生成内部剧单，准备触发自动化上剧...` });
+          event.sender.send("fetch-log-update", { type: 'success', msg: `剔除今日已上剧集后，将为您自动分发 ${newDramas.length} 部新爆款...` });
 
-          // 🚀 2. 自动组装运行任务配置 
           const RUNTIME_CONFIG = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
           RUNTIME_CONFIG.KEY_CONFIG.userKey = userData.KEY_CONFIG?.userKey || "";
           RUNTIME_CONFIG.WORKING_CONFIG = userData.WORKING_CONFIG || {};
           RUNTIME_CONFIG.FILES.DRAMA_LIST = excelPath;
-          
-          // 🌟 把 session 传过去，防止 runAutoTask 重复登录被踢下线
           RUNTIME_CONFIG.session = userData.session; 
           
-          // 🌟 核心修正：一定要接收前端传来的方案列表，并进行过滤！
           const chosenProfiles = config.selectedProfiles || [];
-          
           RUNTIME_CONFIG.SELECTED_PROFILES = Object.keys(userData.profiles || {})
-            .filter(profileName => chosenProfiles.includes(profileName)) // 👈 必须加上这一行！只保留打钩的方案
+            .filter(profileName => chosenProfiles.includes(profileName))
             .map(profileName => {
               const profileFolder = join(PROFILES_DIR, profileName);
               const pData = userData.profiles[profileName];
@@ -336,28 +422,26 @@ ipcMain.on("start-auto-fetch", (event, config) => {
 
           RUNTIME_CONFIG.SETTINGS.ACTION = "publish";
 
-          // 🚀 3. 直接执行核心任务函数
           event.sender.send("task-status-change", true);
           await runAutoTask(event.sender, RUNTIME_CONFIG);
           
           event.sender.send("fetch-log-update", { type: 'success', msg: `🎉 本轮爆款跟进任务执行完毕！` });
           
-        } catch (autoErr) {
-          event.sender.send("fetch-log-update", { type: 'error', msg: `自动上剧执行失败: ${autoErr.message}` });
-        } finally {
-          event.sender.send("task-status-change", false);
+        } else if (res.success && res.data.length === 0) {
+          event.sender.send("fetch-log-update", { type: 'success', msg: `[${new Date().toLocaleTimeString()}] 本次巡航未发现 ROI > ${config.roiThreshold || 0.7} 的爆款` });
+        } else if (res.msg !== 'CANCELLED') {
+          event.sender.send("fetch-log-update", { type: 'error', msg: '后台巡航抓取失败: ' + res.msg });
         }
-
-      } else if (res.success && res.data.length === 0) {
-        event.sender.send("fetch-log-update", { type: 'success', msg: `[${new Date().toLocaleTimeString()}] 本次巡航未发现 ROI > ${config.roiThreshold || 0.7} 的爆款` });
-      } else if (res.msg !== 'CANCELLED') {
-        // 如果是中途取消引发的退出，不报红字错误
-        event.sender.send("fetch-log-update", { type: 'error', msg: '后台巡航抓取失败: ' + res.msg });
+      } catch (fatalError) {
+        // 🛡️ 捕捉到任何致命报错，发给前台，绝不装死
+        console.error("❌ 巡航逻辑发生致命崩溃:", fatalError);
+        event.sender.send("fetch-log-update", { type: 'error', msg: `引擎崩溃: ${fatalError.message}` });
+        event.sender.send("task-status-change", false);
       }
     };
 
-    executeRoutine(); // 收到指令后立刻先跑一次
-    autoFetchTimer = setInterval(executeRoutine, intervalMs); // 随后按定时器循环跑
+    executeRoutine(); 
+    autoFetchTimer = setInterval(executeRoutine, intervalMs); 
     event.sender.send("fetch-log-update", { type: 'status', isRunning: true });
   });
 
