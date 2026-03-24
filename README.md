@@ -29,15 +29,10 @@
    - 项目数 / 广告数 / 账号数等
 
 ##### 演示图
+<img width="2099" height="1499" alt="ba48ba361bfa7f8374770453ac29b92" src="https://github.com/user-attachments/assets/3be4a4e6-695c-462f-a808-6aa510b24cc6" />
+<img width="2099" height="1499" alt="17ec743b4bccfb9f1d608952b305d2e" src="https://github.com/user-attachments/assets/b1927a3f-c495-4950-bfa4-a9ce4f7237c3" />
+<img width="2099" height="1499" alt="8fed2812d7ce54e545fcd0fe51b6544" src="https://github.com/user-attachments/assets/22f52374-8837-4ad2-8db1-bd81d9a701b8" />
+<img width="2099" height="1499" alt="0b97341a3b6bed2a9f00d570935adbb" src="https://github.com/user-attachments/assets/b000f504-9e6d-40bb-a86e-752b23d01a84" />
+<img width="2099" height="1499" alt="d89c46eb3a87ee298b1a8094941cd1e" src="https://github.com/user-attachments/assets/07a69852-1ba3-4c7e-9ba4-b256393162d8" />
 
-![image-20260324152530789](C:\Users\ltp\AppData\Roaming\Typora\typora-user-images\image-20260324152530789.png)
 
-![image-20260324152535224](C:\Users\ltp\AppData\Roaming\Typora\typora-user-images\image-20260324152535224.png)
-
-![image-20260324152541151](C:\Users\ltp\AppData\Roaming\Typora\typora-user-images\image-20260324152541151.png)
-
-![image-20260324152545063](C:\Users\ltp\AppData\Roaming\Typora\typora-user-images\image-20260324152545063.png)
-
-![image-20260324152548559](C:\Users\ltp\AppData\Roaming\Typora\typora-user-images\image-20260324152548559.png)
-
-![image-20260324152552014](C:\Users\ltp\AppData\Roaming\Typora\typora-user-images\image-20260324152552014.png)
