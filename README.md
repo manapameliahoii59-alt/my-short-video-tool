@@ -20,37 +20,32 @@
    - 项目数 / 广告数 / 账号数等
 ##### 演示图
 <table>
-  <tr>
-    <td>
-      <a href="https://github.com/user-attachments/assets/3be4a4e6-695c-462f-a808-6aa510b24cc6" target="_blank">
-        <img src="https://github.com/user-attachments/assets/3be4a4e6-695c-462f-a808-6aa510b24cc6" width="400"/>
-      </a>
-    </td>
-    <td>
-      <a href="https://github.com/user-attachments/assets/b1927a3f-c495-4950-bfa4-a9ce4f7237c3" target="_blank">
-        <img src="https://github.com/user-attachments/assets/b1927a3f-c495-4950-bfa4-a9ce4f7237c3" width="400"/>
-      </a>
-    </td>
-  </tr>
-  <tr>
-    <td>
-      <a href="https://github.com/user-attachments/assets/22f52374-8837-4ad2-8db1-bd81d9a701b8" target="_blank">
-        <img src="https://github.com/user-attachments/assets/22f52374-8837-4ad2-8db1-bd81d9a701b8" width="400"/>
-      </a>
-    </td>
-    <td>
-      <a href="https://github.com/user-attachments/assets/b000f504-9e6d-40bb-a86e-752b23d01a84" target="_blank">
-        <img src="https://github.com/user-attachments/assets/b000f504-9e6d-40bb-a86e-752b23d01a84" width="400"/>
-      </a>
-    </td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center">
-      <a href="https://github.com/user-attachments/assets/07a69852-1ba3-4c7e-9ba4-b256393162d8" target="_blank">
-        <img src="https://github.com/user-attachments/assets/07a69852-1ba3-4c7e-9ba4-b256393162d8" width="500"/>
-      </a>
-    </td>
-  </tr>
+<tr>
+<td align="center">
+<p><b>批量上剧配置</b></p>
+<img src="https://github.com/user-attachments/assets/3be4a4e6-695c-462f-a808-6aa510b24cc6" width="400"/>
+</td>
+<td align="center">
+<p><b>ROI 方案管理</b></p>
+<img src="https://github.com/user-attachments/assets/b1927a3f-c495-4950-bfa4-a9ce4f7237c3" width="400"/>
+</td>
+</tr>
+<tr>
+<td align="center">
+<p><b>策略执行监控</b></p>
+<img src="https://github.com/user-attachments/assets/22f52374-8837-4ad2-8db1-bd81d9a701b8" width="400"/>
+</td>
+<td align="center">
+<p><b>多维参数设置</b></p>
+<img src="https://github.com/user-attachments/assets/b000f504-9e6d-40bb-a86e-752b23d01a84" width="400"/>
+</td>
+</tr>
+<tr>
+<td colspan="2" align="center">
+<p><b>自动化投放看板</b></p>
+<img src="https://github.com/user-attachments/assets/07a69852-1ba3-4c7e-9ba4-b256393162d8" width="600"/>
+</td>
+</tr>
 </table>
 
 
