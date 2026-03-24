@@ -53,7 +53,7 @@ function clearSpaces(str) {
 function smartSplit(str) {
   if (!str) return [];
   return String(str)
-    .split(/[\n,，]+/)
+    .split(/[\n,、]+/)
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
 }

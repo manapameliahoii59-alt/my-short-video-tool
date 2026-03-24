@@ -359,9 +359,8 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
     const specifyKeyStr = isSpecify ? specifyMaterialsArr.join('-') : 'none';
     const folderIdStr = tarMaterItem?.id || 'nofolder';
     const materialCacheKey = `mat_${searchProductName}_${rangeDataObj.startDay}_${rangeDataObj.endDay}_${specifyKeyStr}_${folderIdStr}_${copyrightData}`;
-
+    
     console.log(`   🔍 准备获取素材 (Key: ${searchProductName})...`);
-
     // 使用 getDataWithCache 包裹整个搜索逻辑
     let materials = await getDataWithCache(
       "materials",
@@ -369,8 +368,8 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       async () => {
         let fetchMaterials = [];
         let resAsset;
-
         if (isSpecify) {
+          
           let _materialPar = {
             queryPolicy: "em",
             query: "",
@@ -452,7 +451,6 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
         return fetchMaterials; // 将查到的结果返回给缓存系统
       }
     );
-
     if (isCancelled) return null; // 🌟 获取素材回来后再次检查拦截
 
     // 恢复打印状态标识
