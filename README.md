@@ -37,8 +37,11 @@
     </td>
   </tr>
   <tr>
-    <td colspan="2" align="center">
-      <img src="https://github.com/user-attachments/assets/07a69852-1ba3-4c7e-9ba4-b256393162d8" width="500"/>
+         <td>
+      <img src="[https://github.com/user-attachments/assets/22f52374-8837-4ad2-8db1-bd81d9a701b8](https://github.com/user-attachments/assets/07a69852-1ba3-4c7e-9ba4-b256393162d8)" width="400"/>
+    </td>
+    <td>
+      <img src="https://github.com/user-attachments/assets/a15940d5-9f63-40c7-ad24-d93dd2be7fc6" width="500"/>
     </td>
   </tr>
 </table>
