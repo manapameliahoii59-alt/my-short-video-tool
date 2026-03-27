@@ -149,7 +149,9 @@ import {
   Loading
 } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
-
+defineOptions({
+  name: 'RunTab'
+})
 const props = defineProps(["allProfiles", "profileOrder", "logs", "globalDramaList", "isRunning"]);
 const emit = defineEmits(["run-task", "clear-logs", "update-global-drama"]);
 

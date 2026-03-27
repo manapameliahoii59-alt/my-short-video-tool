@@ -45,7 +45,7 @@
       </div>
     </nav>
 
-    <main>
+    <!-- <main>
       <div class="tab-content">
         <RunTab
           v-if="currentTab === 'run'"
@@ -86,8 +86,50 @@
           @save-settings="handleSaveGlobalSettings"
         />
       </div>
-    </main>
+    </main> -->
 
+
+    <main>
+  <div class="tab-content">
+    <keep-alive :include="['RunTab', 'DataFetchTab', 'ConfigTab']">
+      
+      <RunTab
+        v-if="currentTab === 'run'"
+        :is-running="isRunning"
+        :all-profiles="allProfiles"
+        :profile-order="profileOrder"
+        :logs="logs"
+        :global-drama-list="settings.globalDramaList"
+        @update-global-drama="handleUpdateGlobalDrama"
+        @run-task="handleRunTask"
+        @clear-logs="logs = []"
+      />
+
+      <DataFetchTab
+        v-else-if="currentTab === 'dataFetch'"
+        :all-profiles="allProfiles"
+        :profile-order="profileOrder"
+        @cruise-status-change="(status) => isCruiseRunning = status"
+      />
+
+      <ConfigTab
+        v-else-if="currentTab === 'config'"
+        :all-profiles="allProfiles"
+        :profile-order="profileOrder"
+        :user-key="settings.userKey"
+        @update-profiles="updateProfiles"
+      />
+
+      <SettingsTab
+        v-else-if="currentTab === 'settings'"
+        :settings="settings"
+        @update:settings="(val) => (settings = val)"
+        @save-settings="handleSaveGlobalSettings"
+      />
+      
+    </keep-alive>
+  </div>
+</main>
     <div v-if="isDownloading" class="download-overlay">
       <div class="download-card">
         <h3>正在下载新版本...</h3>

@@ -132,7 +132,9 @@
 
 <script setup>
 import { ElMessage } from "element-plus";
-
+defineOptions({
+  name: 'SettingsTab'
+})
 const props = defineProps(["settings"]);
 const emit = defineEmits(["update:settings", "save-settings"]);
 

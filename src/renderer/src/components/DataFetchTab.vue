@@ -348,7 +348,9 @@ import { ref, onMounted, computed, watch } from "vue";
 import { ElMessage } from "element-plus";
 // 🌟 引入 Tickets（清单图标）和 DocumentDelete
 import { Loading, ArrowRight, Timer, Tickets, DocumentDelete } from "@element-plus/icons-vue";
-
+defineOptions({
+  name: 'DataFetchTab'
+})
 const props = defineProps(["allProfiles", "profileOrder"]);
 const emit = defineEmits(["cruise-status-change"]); 
 

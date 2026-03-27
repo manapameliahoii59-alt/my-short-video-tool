@@ -394,7 +394,9 @@ import {
   Operation
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox, ElLoading } from "element-plus";
-
+defineOptions({
+  name: 'ConfigTab'
+})
 const props = defineProps(["allProfiles", "profileOrder", "userKey"]);
 const emit = defineEmits(["update-profiles"]);
 
