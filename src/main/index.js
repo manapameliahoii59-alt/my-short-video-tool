@@ -135,6 +135,24 @@ const fetchGoodDramasLogic = async (params, sender = null) => {
   }
 };
 
+/** 旧版配置曾将易投账号写在 WORKING_CONFIG.acount，需迁到 account */
+function migrateWorkingConfigAccountKey() {
+  const w = userData.WORKING_CONFIG;
+  if (!w || typeof w !== "object") return false;
+  let changed = false;
+  const acc = String(w.account ?? "").trim();
+  const legacy = String(w.acount ?? "").trim();
+  if (!acc && legacy) {
+    w.account = legacy;
+    changed = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(w, "acount")) {
+    delete w.acount;
+    changed = true;
+  }
+  return changed;
+}
+
 function loadUserData() {
   if (fs.existsSync(USER_DATA_PATH)) {
     try {
@@ -147,6 +165,9 @@ function loadUserData() {
     }
   } else {
     userData = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+    saveUserData();
+  }
+  if (migrateWorkingConfigAccountKey()) {
     saveUserData();
   }
 }
@@ -555,6 +576,9 @@ app.whenReady().then(() => {
     };
     if (!userData.SETTINGS) userData.SETTINGS = {};
     userData.SETTINGS.ACCOUNT_MATCH_COUNT = flatData.accountMatchCount;
+    if (Array.isArray(flatData.profileSets)) {
+      userData.profileSets = flatData.profileSets;
+    }
     saveUserData();
   });
 
@@ -563,16 +587,26 @@ app.whenReady().then(() => {
     saveUserData();
   });
 
-  ipcMain.on("stop-task", (event) => {
+  ipcMain.on("stop-task", () => {
     stopAutoTask();
-    if (globalUiSender) {
-      globalUiSender.send("log-update", "⚠️ 正在取消任务，请稍候..."); 
-    }
   });
 
   ipcMain.on("run-task", async (event, uiConfig) => {
-    globalUiSender = event.sender; 
-    userData.lastConfig = uiConfig;
+    globalUiSender = event.sender;
+    const rawSelected = Array.isArray(uiConfig.selectedProfiles) ? uiConfig.selectedProfiles : [];
+    const validProfileNames = rawSelected.filter((n) => userData.profiles?.[n]);
+    if (validProfileNames.length === 0) {
+      if (rawSelected.length > 0) {
+        event.sender.send(
+          "log-update",
+          `<span style="color:red;">❌ 所选方案已不存在或已删除，请重新选择后启动。</span>`,
+        );
+      }
+      return;
+    }
+
+    const uiConfigSafe = { ...uiConfig, selectedProfiles: validProfileNames };
+    userData.lastConfig = uiConfigSafe;
     saveUserData();
 
     const RUNTIME_CONFIG = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
@@ -583,18 +617,16 @@ app.whenReady().then(() => {
     };
     RUNTIME_CONFIG.FILES.DRAMA_LIST = join(PROFILES_DIR, "global_assets", uiConfig.globalDramaList);
 
-    RUNTIME_CONFIG.SELECTED_PROFILES = uiConfig.selectedProfiles.map(
-      (profileName) => {
-        const profileFolder = join(PROFILES_DIR, profileName);
-        const pData = userData.profiles[profileName];
-        return {
-          name: profileName,
-          businessType: pData.businessType,
-          TEMPLATE: join(profileFolder, pData.files.TEMPLATE),
-          ACCOUNTS: join(profileFolder, pData.files.ACCOUNTS),
-        };
-      },
-    );
+    RUNTIME_CONFIG.SELECTED_PROFILES = validProfileNames.map((profileName) => {
+      const profileFolder = join(PROFILES_DIR, profileName);
+      const pData = userData.profiles[profileName];
+      return {
+        name: profileName,
+        businessType: pData.businessType,
+        TEMPLATE: join(profileFolder, pData.files.TEMPLATE),
+        ACCOUNTS: join(profileFolder, pData.files.ACCOUNTS),
+      };
+    });
 
     RUNTIME_CONFIG.FILES.PAGE_NUM = uiConfig.pageNum ?? 1;
     RUNTIME_CONFIG.FILES.PROJECT_NUM = uiConfig.projectNum ?? 1;
@@ -610,19 +642,27 @@ app.whenReady().then(() => {
     try {
       event.sender.send("task-status-change", true);
       await runAutoTask(event.sender, RUNTIME_CONFIG);
-      event.sender.send("log-update", "🎉 [系统] 队列内所有方案自动化流程执行完毕。");
     } catch (err) {
-      event.sender.send("log-update", `❌ [程序异常] ${err.message}`);
+      console.error("[run-task]", err);
     } finally {
       event.sender.send("task-status-change", false);
     }
   });
 
-  ipcMain.handle("cloud:save-profiles", async (event, { userKey, profiles }) => {
+  ipcMain.handle("cloud:save-profiles", async (event, { userKey, profiles, profileSets }) => {
       try {
+        const setsForZip = Array.isArray(profileSets)
+          ? profileSets
+          : (Array.isArray(userData.profileSets) ? userData.profileSets : []);
+        if (Array.isArray(profileSets)) {
+          userData.profileSets = profileSets;
+          saveUserData();
+        }
+
         const zip = new AdmZip();
         if (fs.existsSync(PROFILES_DIR)) zip.addLocalFolder(PROFILES_DIR, "profiles_records");
         zip.addFile("profiles_config.json", Buffer.from(JSON.stringify(profiles), "utf8"));
+        zip.addFile("profile_sets.json", Buffer.from(JSON.stringify(setsForZip), "utf8"));
 
         const zipBuffer = zip.toBuffer();
         const form = new FormData();
@@ -672,9 +712,103 @@ app.whenReady().then(() => {
         saveUserData();
         fs.unlinkSync(configPath);
       }
-      return { status: "ok", data: profilesData };
+
+      const profileSetsPath = join(DATA_ROOT, "profile_sets.json");
+      let restoredProfileSets = null;
+      if (fs.existsSync(profileSetsPath)) {
+        try {
+          const parsedSets = JSON.parse(fs.readFileSync(profileSetsPath, "utf-8"));
+          if (Array.isArray(parsedSets)) {
+            userData.profileSets = parsedSets;
+            restoredProfileSets = parsedSets;
+            saveUserData();
+          }
+        } catch (_) {
+          /* ignore corrupt profile_sets.json */
+        }
+        try {
+          fs.unlinkSync(profileSetsPath);
+        } catch (_) {
+          /* ignore */
+        }
+      }
+
+      return {
+        status: "ok",
+        data: profilesData,
+        profileSetsUpdatedFromBackup: restoredProfileSets !== null,
+        profileSets: Array.isArray(userData.profileSets) ? userData.profileSets : [],
+      };
     } catch (error) {
       return { status: "error", msg: "下载失败: " + error.message };
+    }
+  });
+
+  /**
+   * 方案集独立同步（与整包 zip 备份无关）
+   * POST /api/profile-sets/save  JSON body: { account: string, profileSets: object[] }
+   * GET  /api/profile-sets/get   query: account
+   * 成功时 GET 响应体可为数组，或 { status:"ok", profileSets:[] }，或 { data:[] }
+   */
+  const normalizeRemoteProfileSets = (body) => {
+    if (body == null) return null;
+    if (Array.isArray(body)) return body;
+    if (typeof body !== "object") return null;
+    if (Array.isArray(body.profileSets)) return body.profileSets;
+    if (Array.isArray(body.data)) return body.data;
+    if (body.data && typeof body.data === "object" && Array.isArray(body.data.profileSets)) {
+      return body.data.profileSets;
+    }
+    return null;
+  };
+
+  ipcMain.handle("profile-sets:save-remote", async (_event, { account, profileSets }) => {
+    const acc = typeof account === "string" ? account.trim() : "";
+    if (!acc) return { status: "error", msg: "账号为空" };
+    if (!Array.isArray(profileSets)) return { status: "error", msg: "方案集数据无效" };
+    try {
+      const response = await axios.post(
+        "http://129.204.86.63:3535/api/profile-sets/save",
+        { account: acc, profileSets },
+        { headers: { "Content-Type": "application/json" }, timeout: 30000 },
+      );
+      const data = response.data;
+      if (data && typeof data === "object" && data.status === "error") {
+        return { status: "error", msg: data.msg || data.message || "保存失败" };
+      }
+      return { status: "ok", ...(typeof data === "object" && data ? data : {}) };
+    } catch (error) {
+      const detail =
+        error.response?.data?.msg ||
+        error.response?.data?.message ||
+        error.message;
+      return { status: "error", msg: "保存失败: " + detail };
+    }
+  });
+
+  ipcMain.handle("profile-sets:get-remote", async (_event, account) => {
+    const acc = typeof account === "string" ? account.trim() : "";
+    if (!acc) return { status: "error", msg: "账号为空" };
+    try {
+      const response = await axios.get("http://129.204.86.63:3535/api/profile-sets/get", {
+        params: { account: acc },
+        timeout: 30000,
+      });
+      const body = response.data;
+      if (body && typeof body === "object" && body.status === "error") {
+        return { status: "error", msg: body.msg || body.message || "获取失败" };
+      }
+      const list = normalizeRemoteProfileSets(body);
+      if (!Array.isArray(list)) {
+        return { status: "error", msg: "服务器返回的方案集格式无法识别" };
+      }
+      return { status: "ok", profileSets: list };
+    } catch (error) {
+      const detail =
+        error.response?.data?.msg ||
+        error.response?.data?.message ||
+        error.message;
+      return { status: "error", msg: "获取失败: " + detail };
     }
   });
 

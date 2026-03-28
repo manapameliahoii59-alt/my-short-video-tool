@@ -32,6 +32,8 @@ const CONFIG = {
     ACCOUNT_MATCH_COUNT: 2,
     ACTION: "cancel",
   },
+  /** 运行页「方案集」：{ id, name, profiles: string[] }[] */
+  profileSets: [],
 };
 
 export default CONFIG; // 必须使用 export default

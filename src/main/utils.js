@@ -472,6 +472,114 @@ async function ensureAuth(account, password, currentSession = null, baseUrl = "h
   }
 }
 
+// --- 自动化任务：账号匹配、素材名匹配、Excel 布局校验（不依赖任务内全局 CONFIG） ---
+
+/**
+ * 按模板行从账号库 Excel 行中筛选并随机抽取指定数量的「账号」列
+ */
+function pickAccountsForPublish(rows, targetConfig, businessType, matchCount) {
+  if (!Array.isArray(rows)) return [];
+
+  const availableRows = rows.filter((row) => {
+    const accountStr = String(row["账号"] || "").trim();
+    if (!accountStr || accountStr === "undefined") {
+      return false;
+    }
+
+    if (!targetConfig.email || !targetConfig.copyright) {
+      return false;
+    }
+
+    const basicMatch =
+      String(row["邮箱"]).trim() === String(targetConfig.email).trim() &&
+      String(row["版权"]).trim() === String(targetConfig.copyright).trim();
+
+    if (!basicMatch) return false;
+
+    let subjectMatch = false;
+    const rowSubject = String(row["主体"]).trim();
+    const targetSubject = String(targetConfig.subject).trim();
+
+    if (businessType === "端原生-付费短剧") {
+      const rowVal = Math.floor(parseFloat(rowSubject));
+      const targetVal = Math.floor(parseFloat(targetSubject));
+
+      if (!isNaN(rowVal) && !isNaN(targetVal)) {
+        subjectMatch = rowVal === targetVal;
+      } else {
+        subjectMatch = rowSubject === targetSubject;
+      }
+    } else {
+      subjectMatch = rowSubject === targetSubject;
+    }
+
+    return subjectMatch;
+  });
+
+  const shuffled = availableRows.sort(() => 0.5 - Math.random());
+  const countToTake = Math.min(shuffled.length, matchCount);
+
+  return shuffled
+    .slice(0, countToTake)
+    .map((row) => String(row["账号"]).trim());
+}
+
+/** 在素材文件夹列表中按名称（去空格匹配）查找一项 */
+function findMaterialFolderByName(materialFileNameList, fileName) {
+  if (
+    !materialFileNameList ||
+    !Array.isArray(materialFileNameList) ||
+    materialFileNameList.length === 0 ||
+    !fileName
+  ) {
+    return undefined;
+  }
+  return materialFileNameList.find(
+    (item) => item.name === clearSpaces(fileName),
+  );
+}
+
+/**
+ * 校验多个 Excel 是否存在且首行列头包含必填项
+ * @param {Array<{ name: string, path: string, headers: string[] }>} specs
+ */
+function validateAutomationWorkbookLayout(specs) {
+  const errors = [];
+  for (const file of specs) {
+    if (!fs.existsSync(file.path)) {
+      errors.push(`❌ 文件丢失: ${file.name} (路径: ${file.path})`);
+      continue;
+    }
+    try {
+      const workbook = xlsx.readFile(file.path);
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const jsonData = xlsx.utils.sheet_to_json(sheet, { header: 1 });
+      const actualHeaders = jsonData[0] || [];
+      const missing = file.headers.filter((h) => !actualHeaders.includes(h));
+      if (missing.length > 0) {
+        errors.push(
+          `❌ 文件列缺失: ${file.name} 缺少必要列: [${missing.join(", ")}]`,
+        );
+      }
+    } catch (e) {
+      errors.push(`❌ 文件读取失败: ${file.name} (${e.message})`);
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+/** 批量确保目录存在（递归创建） */
+function ensureDirectories(dirs) {
+  if (!Array.isArray(dirs)) return;
+  dirs.forEach((dir) => {
+    if (!fs.existsSync(dir)) {
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+      } catch (_e) {}
+    }
+  });
+}
+
 // 👇 改用 ES Module 导出
 export {
   rootDir,
@@ -489,5 +597,9 @@ export {
   clearAccountsCache,
   getTodayString, // 🌟 新增
   sleep,           // 🌟 新增
-  ensureAuth
+  ensureAuth,
+  pickAccountsForPublish,
+  findMaterialFolderByName,
+  validateAutomationWorkbookLayout,
+  ensureDirectories,
 };

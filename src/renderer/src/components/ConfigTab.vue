@@ -398,7 +398,7 @@ defineOptions({
   name: 'ConfigTab'
 })
 const props = defineProps(["allProfiles", "profileOrder", "userKey"]);
-const emit = defineEmits(["update-profiles"]);
+const emit = defineEmits(["update-profiles", "update-profile-sets"]);
 
 const buildNextOrder = (profiles, preferredOrder = null) => {
   const existed = Array.isArray(preferredOrder) && preferredOrder.length > 0
@@ -511,6 +511,9 @@ const handleCloudDownload = async () => {
       if (res.status === "ok") {
         manualEmptyGroups.value = new Set(["默认分组"]);
         emitProfilesUpdate(res.data, Object.keys(res.data || {}));
+        if (res.profileSetsUpdatedFromBackup && Array.isArray(res.profileSets)) {
+          emit("update-profile-sets", res.profileSets);
+        }
         initNewProfile();
         nextTick(() => {
           const s = getSnapshotString(res.data, manualEmptyGroups.value);

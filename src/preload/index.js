@@ -38,6 +38,10 @@ const api = {
   // --- 云端同步 ---
   cloudSave: (data) => ipcRenderer.invoke("cloud:save-profiles", data),
   cloudGet: (key) => ipcRenderer.invoke("cloud:get-profiles", key),
+  /** 仅同步方案集 JSON：POST { account, profileSets } */
+  saveProfileSetsRemote: (payload) => ipcRenderer.invoke("profile-sets:save-remote", payload),
+  /** 仅拉取方案集：GET ?account= */
+  getProfileSetsRemote: (account) => ipcRenderer.invoke("profile-sets:get-remote", account),
 
   // --- 系统弹窗 ---
   showMessage: (options) => ipcRenderer.invoke("dialog:showMessage", options),

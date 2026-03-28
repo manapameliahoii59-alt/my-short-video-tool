@@ -32,6 +32,64 @@
     </div>
 
     <div class="card-header-actions profile-select-section">
+      <div class="row-flex profile-set-row">
+        <span style="width: 100px; font-weight: bold; flex-shrink: 0">
+          运行预设：
+        </span>
+        <el-select
+          v-model="selectedProfileSetId"
+          clearable
+          filterable
+          placeholder="选用已保存的一批运行方案（可跨分组）"
+          style="flex: 1"
+          @change="onProfileSetSelectChange"
+        >
+          <el-option
+            v-for="item in profileSets"
+            :key="item.id"
+            :label="item.name"
+            :value="item.id"
+          >
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+              <span>{{ item.name }}</span>
+              <span style="color: #909399; font-size: 12px;">
+                {{ validProfilesInSet(item).length }} 个方案
+              </span>
+            </div>
+          </el-option>
+        </el-select>
+        <el-button type="primary" link @click="openProfileSetDialog('list')">
+          [管理预设]
+        </el-button>
+        <el-button
+          type="success"
+          link
+          :disabled="selectedProfiles.length === 0"
+          @click="openProfileSetDialog('from-current')"
+        >
+          [保存当前为预设]
+        </el-button>
+        <el-button
+          type="warning"
+          link
+          :disabled="isUploadingProfileSetsToCloud"
+          @click="uploadProfileSetsToCloud"
+        >
+          <el-icon v-if="isUploadingProfileSetsToCloud" class="is-loading" style="margin-right: 4px;"><Loading /></el-icon>
+          [上传预设]
+        </el-button>
+        <el-button
+          type="primary"
+          link
+          :disabled="isDownloadingProfileSetsFromCloud"
+          @click="downloadProfileSetsFromCloud"
+        >
+          <el-icon v-if="isDownloadingProfileSetsFromCloud" class="is-loading" style="margin-right: 4px;"><Loading /></el-icon>
+          [从云端拉取预设]
+        </el-button>
+      </div>
+
+
       <div class="row-flex">
         <span style="width: 100px; font-weight: bold; flex-shrink: 0">
           运行方案：
@@ -68,6 +126,27 @@
         <el-button type="primary" link @click="selectAllProfiles" style="margin-left: 10px;">
           [全选]
         </el-button>
+        <el-dropdown
+          trigger="click"
+          :disabled="!hasAnyGroupProfiles"
+          @command="addGroupProfilesToSelection"
+        >
+          <el-button type="primary" link style="margin-left: 4px;">
+            [按分组追加] <el-icon class="dropdown-caret"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
+                v-for="g in groupedProfilesForSelect"
+                :key="g.groupName"
+                :command="g.groupName"
+                :disabled="!g.options.length"
+              >
+                {{ g.groupName }}（{{ g.options.length }}）
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button type="danger" link @click="selectedProfiles = []">
           [清空]
         </el-button>
@@ -136,6 +215,19 @@
       <div v-for="(log, i) in logs" :key="i" class="log-line" v-html="log"></div>
       <div v-if="logs.length === 0" class="log-empty">⏳ 等待指令启动...</div>
     </div>
+
+    <ProfileSetManageDialog
+      ref="profileSetManageRef"
+      v-model="profileSetDialogVisible"
+      :all-profiles="allProfiles"
+      :profile-order="profileOrder"
+      :profile-sets="profileSets"
+      :working-account="workingAccount"
+      @update-profile-sets="(v) => emit('update-profile-sets', v)"
+      @applied="onProfileSetDialogApplied"
+      @cleared-selected-preset="selectedProfileSetId = ''"
+      @remove-preset="onProfileSetRemoved"
+    />
   </div>
 </template>
 
@@ -146,21 +238,133 @@ import {
   Delete,
   Document,
   DocumentChecked,
-  Loading
+  Loading,
+  ArrowDown,
 } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 defineOptions({
   name: 'RunTab'
 })
-const props = defineProps(["allProfiles", "profileOrder", "logs", "globalDramaList", "isRunning"]);
-const emit = defineEmits(["run-task", "clear-logs", "update-global-drama"]);
+import ProfileSetManageDialog from "./ProfileSetManageDialog.vue";
+import { useProfileSetsRemoteSync } from "../composables/useProfileSetsRemoteSync.js";
+
+const props = defineProps({
+  allProfiles: Object,
+  profileOrder: Array,
+  logs: Array,
+  globalDramaList: String,
+  isRunning: Boolean,
+  profileSets: { type: Array, default: () => [] },
+  /** 系统设置中的易投账号，用于方案集云端同步 */
+  workingAccount: { type: String, default: "" },
+});
+const emit = defineEmits(["run-task", "clear-logs", "update-global-drama", "update-profile-sets"]);
 
 const isStopping = ref(false);
+const profileSetManageRef = ref(null);
+
+const {
+  isUploadingProfileSetsToCloud,
+  isDownloadingProfileSetsFromCloud,
+  uploadProfileSetsToCloud,
+  downloadProfileSetsFromCloud,
+} = useProfileSetsRemoteSync(
+  () => props.profileSets,
+  () => (props.workingAccount || "").trim(),
+  (list) => emit("update-profile-sets", list),
+  () => {
+    selectedProfileSetId.value = "";
+  },
+);
 const selectedProfiles = ref([]);
 const logRef = ref(null);
 const isDragging = ref(false);
 
 const form = reactive({ action: "publish" });
+
+const selectedProfileSetId = ref("");
+const applyingProfileSet = ref(false);
+const profileSetDialogVisible = ref(false);
+
+const validProfilesInSet = (row) => {
+  const list = row?.profiles;
+  if (!Array.isArray(list) || !props.allProfiles) return [];
+  return list.filter((name) => props.allProfiles[name]);
+};
+
+const openProfileSetDialog = (mode, row) => {
+  const dlg = profileSetManageRef.value;
+  if (!dlg) return;
+  if (mode === "list") dlg.openList();
+  else if (mode === "create") dlg.openCreate();
+  else if (mode === "edit" && row) dlg.openEdit(row);
+  else if (mode === "from-current") dlg.openFromCurrent(selectedProfiles.value);
+};
+
+const onProfileSetDialogApplied = ({ id, profiles }) => {
+  selectedProfileSetId.value = id;
+  applyingProfileSet.value = true;
+  selectedProfiles.value = [...profiles];
+  nextTick(() => {
+    applyingProfileSet.value = false;
+  });
+};
+
+const onProfileSetRemoved = (id) => {
+  if (selectedProfileSetId.value === id) selectedProfileSetId.value = "";
+};
+
+const onProfileSetSelectChange = (id) => {
+  if (!id) return;
+  const item = (props.profileSets || []).find((s) => s.id === id);
+  if (!item) return;
+  const profiles = validProfilesInSet(item);
+  if (profiles.length === 0) {
+    ElMessage.warning("该预设内没有当前仍存在的方案，请在「管理预设」中重新编辑");
+    return;
+  }
+  applyingProfileSet.value = true;
+  selectedProfiles.value = profiles;
+  nextTick(() => {
+    applyingProfileSet.value = false;
+  });
+};
+
+watch(
+  selectedProfiles,
+  () => {
+    if (applyingProfileSet.value) return;
+    selectedProfileSetId.value = "";
+  },
+  { deep: true },
+);
+
+watch(
+  () => props.profileSets,
+  () => {
+    const ids = new Set((props.profileSets || []).map((s) => s.id));
+    if (selectedProfileSetId.value && !ids.has(selectedProfileSetId.value)) {
+      selectedProfileSetId.value = "";
+    }
+  },
+  { deep: true },
+);
+
+/** 方案管理删除/重载方案后，运行区多选里去掉已不存在的名字，避免主进程报错 */
+watch(
+  () => props.allProfiles && Object.keys(props.allProfiles).sort().join("\0"),
+  () => {
+    if (applyingProfileSet.value || !props.allProfiles) return;
+    if (!selectedProfiles.value.length) return;
+    const next = selectedProfiles.value.filter((n) => props.allProfiles[n]);
+    if (next.length === selectedProfiles.value.length) return;
+    applyingProfileSet.value = true;
+    selectedProfiles.value = next;
+    nextTick(() => {
+      applyingProfileSet.value = false;
+    });
+  },
+);
 
 // 将所有方案按分组重新整理，供下拉框使用
 const groupedProfilesForSelect = computed(() => {
@@ -189,13 +393,36 @@ const groupedProfilesForSelect = computed(() => {
   for (const [gName, pList] of groupsMap.entries()) {
     if (pList.length > 0 || gName === "默认分组") {
       result.push({
+        groupName: gName,
         label: `📂 ${gName}`,
-        options: pList
+        options: pList,
       });
     }
   }
   return result;
 });
+
+const hasAnyGroupProfiles = computed(() =>
+  groupedProfilesForSelect.value.some((g) => g.options.length > 0),
+);
+
+const addGroupProfilesToSelection = (groupName) => {
+  const group = groupedProfilesForSelect.value.find((g) => g.groupName === groupName);
+  if (!group?.options?.length) return;
+  applyingProfileSet.value = true;
+  const seen = new Set(selectedProfiles.value);
+  const next = [...selectedProfiles.value];
+  for (const n of group.options) {
+    if (!seen.has(n)) {
+      seen.add(n);
+      next.push(n);
+    }
+  }
+  selectedProfiles.value = next;
+  nextTick(() => {
+    applyingProfileSet.value = false;
+  });
+};
 
 const getFileName = (path) => (path ? path.split(/[\\/]/).pop() : "");
 
@@ -337,6 +564,17 @@ watch(() => props.logs, () => {
   display: flex;
   flex-direction: column;
   align-items: stretch;
+}
+
+.profile-set-row {
+  margin-bottom: 10px;
+}
+
+
+.dropdown-caret {
+  font-size: 11px;
+  margin-left: 2px;
+  vertical-align: middle;
 }
 
 .row-flex {

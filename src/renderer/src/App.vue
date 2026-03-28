@@ -54,12 +54,15 @@
           :profile-order="profileOrder"
           :logs="logs"
           :global-drama-list="settings.globalDramaList"
+          :profile-sets="settings.profileSets || []"
+          :working-account="settings.workingAccount"
           @update-global-drama="
             (val) => {
               settings.globalDramaList = val;
               handleSaveGlobalSettings(settings);
             }
           "
+          @update-profile-sets="handleSaveProfileSets"
           @run-task="handleRunTask"
           @clear-logs="logs = []"
         />
@@ -77,12 +80,13 @@
           :profile-order="profileOrder"
           :user-key="settings.userKey"
           @update-profiles="updateProfiles"
+          @update-profile-sets="handleSaveProfileSets"
         />
 
         <SettingsTab
           v-if="currentTab === 'settings'"
           :settings="settings"
-          @update:settings="(val) => (settings = val)"
+          @update:settings="applySettingsFromChild"
           @save-settings="handleSaveGlobalSettings"
         />
       </div>
@@ -226,6 +230,7 @@ const settings = ref({
   adsNum: 1,
   isAccountFlat: false,
   dateRange: "",
+  profileSets: [],
 });
 const lastConfig = ref({});
 const appVersion = ref("1.0.0"); 
@@ -315,6 +320,19 @@ const manualCheckUpdate = () => {
   }
 };
 
+/** 从运行预设（profileSets）中剔除已不存在的方案名 */
+function pruneProfileSetsAgainstProfiles(sets, existingKeySet) {
+  const list = Array.isArray(sets) ? sets : [];
+  let changed = false;
+  const pruned = list.map((s) => {
+    const arr = Array.isArray(s?.profiles) ? s.profiles : [];
+    const next = arr.filter((name) => existingKeySet.has(name));
+    if (next.length !== arr.length) changed = true;
+    return { ...s, profiles: next };
+  });
+  return { pruned, changed };
+}
+
 // --- 生命周期：初始化数据接收 ---
 onMounted(() => {
   // 1. 监听主进程发来的初始化数据
@@ -325,9 +343,15 @@ onMounted(() => {
     profileOrder.value = Array.isArray(data.profileOrder) ? data.profileOrder : Object.keys(data.profiles || {});
     if (data.lastConfig) lastConfig.value = data.lastConfig;
 
+    const existingKeys = new Set(Object.keys(data.profiles || {}));
+    let profileSets = Array.isArray(data.profileSets) ? data.profileSets : [];
+    const profileSetsPrune = pruneProfileSetsAgainstProfiles(profileSets, existingKeys);
+    if (profileSetsPrune.changed) profileSets = profileSetsPrune.pruned;
+
     settings.value = {
       userKey: data.KEY_CONFIG?.userKey || "",
-      workingAccount: data.WORKING_CONFIG?.account || "",
+      workingAccount:
+        data.WORKING_CONFIG?.account || data.WORKING_CONFIG?.acount || "",
       workingPassword: data.WORKING_CONFIG?.password || "",
 
       globalDramaList: data.FILES?.globalDramaList || "",
@@ -337,7 +361,11 @@ onMounted(() => {
       adsNum: data.FILES?.ADS_NUM ?? 1,
       isAccountFlat: data.FILES?.isAccountFlat || false,
       dateRange: data.FILES?.dateRange || "",
+      profileSets,
     };
+    if (profileSetsPrune.changed && window.api?.saveSettings) {
+      window.api.saveSettings(JSON.parse(JSON.stringify(settings.value)));
+    }
     if (data.appVersion) {
       appVersion.value = data.appVersion;
     }
@@ -445,6 +473,21 @@ onUnmounted(() => {
 });
 
 /**
+ * 同步运行页「运行预设」(profileSets) 到主进程本地配置
+ */
+const handleSaveProfileSets = (val) => {
+  settings.value.profileSets = val;
+  if (window.api && window.api.saveSettings) {
+    window.api.saveSettings(JSON.parse(JSON.stringify(settings.value)));
+  }
+};
+
+/** 系统设置子组件回写（显式写 ref，避免根级赋值在部分环境下未落到 settings.value） */
+const applySettingsFromChild = (val) => {
+  settings.value = val;
+};
+
+/**
  * 保存全局系统设置
  */
 const handleSaveGlobalSettings = (data) => {
@@ -463,6 +506,14 @@ const updateProfiles = (payload) => {
   const normalizedOrder = Array.isArray(payload?.profileOrder)
     ? payload.profileOrder
     : Object.keys(normalizedProfiles);
+  const existingKeys = new Set(Object.keys(normalizedProfiles));
+  const { pruned, changed } = pruneProfileSetsAgainstProfiles(
+    settings.value.profileSets,
+    existingKeys,
+  );
+  if (changed) {
+    settings.value.profileSets = pruned;
+  }
   allProfiles.value = normalizedProfiles;
   profileOrder.value = normalizedOrder;
   window.api.updateProfiles(
@@ -473,6 +524,9 @@ const updateProfiles = (payload) => {
       }),
     ),
   );
+  if (changed && window.api?.saveSettings) {
+    window.api.saveSettings(JSON.parse(JSON.stringify(settings.value)));
+  }
 };
 
 /**

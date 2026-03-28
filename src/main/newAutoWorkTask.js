@@ -26,7 +26,11 @@ import {
   getDateRangeByType,
   getCachedAccounts,
   clearAccountsCache,
-  ensureAuth
+  ensureAuth,
+  pickAccountsForPublish,
+  findMaterialFolderByName,
+  validateAutomationWorkbookLayout,
+  ensureDirectories,
 } from "./utils";
 
 let uiSender = null;
@@ -35,24 +39,37 @@ let uiSelectedExcelPath = null;
 // 🌟 新增：中断开关
 let isCancelled = false;
 
-// 重写 console.log，让它既在后台打印，又发送到前台网页
-const originalLog = console.log;
-console.log = function (...args) {
-  originalLog.apply(console, args);
-  if (uiSender) {
-    const msg = util.format(...args);
-    uiSender.send("log-update", msg);
-  }
-};
+// 保留终端输出用的原始 console 方法（避免劫持主进程全局 console）
+const c = console;
+const logToTerminal = c.log.bind(c);
+const errToTerminal = c.error.bind(c);
+const warnToTerminal = c.warn.bind(c);
 
-const originalError = console.error;
-console.error = function (...args) {
-  originalError.apply(console, args);
+/** 仅本模块自动化任务：同步到 RunTab，不影响其他主进程代码的 console */
+function taskUiLog(...args) {
+  logToTerminal(...args);
+  if (uiSender) {
+    uiSender.send("log-update", util.format(...args));
+  }
+}
+
+function taskUiError(...args) {
+  errToTerminal(...args);
   if (uiSender) {
     const msg = util.format(...args);
     uiSender.send("log-update", `<span style="color:red;">❌ ${msg}</span>`);
   }
-};
+}
+
+function taskUiWarn(...args) {
+  warnToTerminal(...args);
+  if (uiSender) {
+    uiSender.send(
+      "log-update",
+      `<span style="color:#e6a23c;">⚠️ ${util.format(...args)}</span>`,
+    );
+  }
+}
 
 /**
  * 1. 配置中心
@@ -94,49 +111,12 @@ function getAvailableAccounts(
   x = CONFIG.SETTINGS.ACCOUNT_MATCH_COUNT,
 ) {
   const rows = getCachedAccounts(CONFIG.FILES.ACCOUNTS);
-
-  const availableRows = rows.filter((row) => {
-    const accountStr = String(row["账号"] || "").trim();
-    if (!accountStr || accountStr === "undefined") {
-      return false;
-    }
-
-    if (!targetConfig.email || !targetConfig.copyright) {
-      return false;
-    }
-
-    const basicMatch =
-      String(row["邮箱"]).trim() === String(targetConfig.email).trim() &&
-      String(row["版权"]).trim() === String(targetConfig.copyright).trim();
-
-    if (!basicMatch) return false;
-
-    let subjectMatch = false;
-    const rowSubject = String(row["主体"]).trim();
-    const targetSubject = String(targetConfig.subject).trim();
-
-    if (CONFIG.FILES.BUSINESS_TYPE === "端原生-付费短剧") {
-      const rowVal = Math.floor(parseFloat(rowSubject));
-      const targetVal = Math.floor(parseFloat(targetSubject));
-
-      if (!isNaN(rowVal) && !isNaN(targetVal)) {
-        subjectMatch = rowVal === targetVal;
-      } else {
-        subjectMatch = rowSubject === targetSubject;
-      }
-    } else {
-      subjectMatch = rowSubject === targetSubject;
-    }
-
-    return subjectMatch;
-  });
-
-  const shuffled = availableRows.sort(() => 0.5 - Math.random());
-  const countToTake = Math.min(shuffled.length, x);
-
-  return shuffled
-    .slice(0, countToTake)
-    .map((row) => String(row["账号"]).trim());
+  return pickAccountsForPublish(
+    rows,
+    targetConfig,
+    CONFIG.FILES.BUSINESS_TYPE,
+    x,
+  );
 }
 
 
@@ -163,16 +143,7 @@ async function getMaterialFileName() {
 }
 
 function getTargetMaterialFileId(fileName) {
-  if (
-    materialFileNameList &&
-    Array.isArray(materialFileNameList) &&
-    materialFileNameList.length > 0 &&
-    fileName
-  ) {
-    return materialFileNameList.find((item) => {
-      return item.name === clearSpaces(fileName);
-    });
-  }
+  return findMaterialFolderByName(materialFileNameList, fileName);
 }
 
 /**
@@ -191,11 +162,11 @@ async function getDataWithCache(type, key, fetchFn) {
   const shortKey = key.length > 20 ? key.substring(0, 20) + "..." : key;
 
   if (GLOBAL_CACHE[type] && GLOBAL_CACHE[type][key]) {
-    console.log(`   ⚡ [缓存命中] ${type}: ${shortKey}`);
+    taskUiLog(`   ⚡ [缓存命中] ${type}: ${shortKey}`);
     return GLOBAL_CACHE[type][key];
   }
 
-  console.log(`   🌐 [发起请求] ${type}: ${shortKey}`);
+  taskUiLog(`   🌐 [发起请求] ${type}: ${shortKey}`);
   const data = await fetchFn();
   if (data) {
     GLOBAL_CACHE[type][key] = data;
@@ -360,7 +331,7 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
     const folderIdStr = tarMaterItem?.id || 'nofolder';
     const materialCacheKey = `mat_${searchProductName}_${rangeDataObj.startDay}_${rangeDataObj.endDay}_${specifyKeyStr}_${folderIdStr}_${copyrightData}`;
     
-    console.log(`   🔍 准备获取素材 (Key: ${searchProductName})...`);
+    taskUiLog(`   🔍 准备获取素材 (Key: ${searchProductName})...`);
     // 使用 getDataWithCache 包裹整个搜索逻辑
     let materials = await getDataWithCache(
       "materials",
@@ -463,7 +434,7 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
     if (!materials || materials.length === 0)
       throw new Error(`素材查询结果为空`);
 
-    console.log(
+    taskUiLog(
       `   🎬 素材获取成功: ${materials.length} 条 (${rankingListOrLibrarySign})`,
     );
 
@@ -570,7 +541,7 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       },
     };
   } catch (err) {
-    console.error(`❌ [${productName}] 数据组装失败: ${err.message}`);
+    taskUiError(`❌ [${productName}] 数据组装失败: ${err.message}`);
     recordTaskStatus(dramaInfo, proConfigData, "ERROR", err.message);
     return null;
   }
@@ -584,13 +555,13 @@ async function submitBatchTasks(taskList) {
 
   const isPublish = CONFIG.SETTINGS.ACTION === "publish";
 
-  console.log(
+  taskUiLog(
     `\n🚀 [${isPublish ? "正式发布" : "测试模式"}] 开始处理 ${taskList.length} 个任务...`,
   );
 
   try {
     const payload1List = taskList.map((t) => t.payload1);
-    console.log(`⏳ 正在请求创建模板 (insert)...`);
+    taskUiLog(`⏳ 正在请求创建模板 (insert)...`);
 
     const resInsert = await client.post(
       "/adv-release-toutiao/publishTemplate/insert",
@@ -608,7 +579,7 @@ async function submitBatchTasks(taskList) {
         `批量创建模板失败: ${resInsert.data?.msg || "返回数据为空"}`,
       );
     }
-    console.log(`✅ 模板创建成功，获取到 ${resultList.length} 个 ID`);
+    taskUiLog(`✅ 模板创建成功，获取到 ${resultList.length} 个 ID`);
 
     const payload2List = [];
     const successTasks = [];
@@ -638,30 +609,30 @@ async function submitBatchTasks(taskList) {
     }
 
     if (payload2List.length === 0) {
-      console.warn("⚠️ 本批次无有效模板，跳过后续步骤");
+      taskUiWarn("⚠️ 本批次无有效模板，跳过后续步骤");
       return;
     }
 
-    console.log(`⏳ 模板已就绪，正在缓冲等待，准备最终提交...`);
+    taskUiLog(`⏳ 模板已就绪，正在缓冲等待，准备最终提交...`);
     // await randomSleep(minTime, maxTime);
     await randomSleep(1000, 2000);
 
-    console.log(
+    taskUiLog(
       "\n-------------------------------------------------------------",
     );
-    console.log(`📋 准备提交的数据 (${payload2List.length} 条):`);
+    taskUiLog(`📋 准备提交的数据 (${payload2List.length} 条):`);
     payload2List.forEach((p, idx) => {
-      console.log(
+      taskUiLog(
         `   ${idx + 1}. 模板ID: ${p.publishTemplateId} | 剧名: ${p.bookName} | 策略: ${p.promotionStrategyName}`,
       );
     });
-    console.log(
+    taskUiLog(
       "-------------------------------------------------------------\n",
     );
 
     if (!isPublish) {
-      console.log("🛑 [测试阻断] 已暂停最终提交 (publishInstance/batchInsert)");
-      console.log("✅ 测试流程结束，数据已生成，未消耗真实配额。\n");
+      taskUiLog("🛑 [测试阻断] 已暂停最终提交 (publishInstance/batchInsert)");
+      taskUiLog("✅ 测试流程结束，数据已生成，未消耗真实配额。\n");
       return;
     }
 
@@ -676,7 +647,7 @@ async function submitBatchTasks(taskList) {
     );
 
     if (resInstance.data.code === 0) {
-      console.log(`✨ [批量执行] ${payload2List.length} 个任务全部提交成功！`);
+      taskUiLog(`✨ [批量执行] ${payload2List.length} 个任务全部提交成功！`);
       for (const successItem of successTasks) {
         const { task, templateId } = successItem;
         recordTaskStatus(
@@ -688,7 +659,7 @@ async function submitBatchTasks(taskList) {
       }
     } else {
       const errorMsg = resInstance.data.msg || "接口错误";
-      console.error(`❌ [批量执行] Instance 提交失败: ${errorMsg}`);
+      taskUiError(`❌ [批量执行] Instance 提交失败: ${errorMsg}`);
       successTasks.forEach((item) => {
         recordTaskStatus(
           item.task.meta.dramaInfo,
@@ -699,7 +670,7 @@ async function submitBatchTasks(taskList) {
       });
     }
   } catch (err) {
-    console.error(`❌ [测试阶段] 发生异常: ${err.message}`);
+    taskUiError(`❌ [测试阶段] 发生异常: ${err.message}`);
     taskList.forEach((t) => {
       recordTaskStatus(
         t.meta.dramaInfo,
@@ -747,7 +718,7 @@ async function loadDramaData(index) {
 }
 
 function checkEnvironment() {
-  console.log("🔍 正在进行环境与文件结构前置检测...");
+  taskUiLog("🔍 正在进行环境与文件结构前置检测...");
 
   const logPath =
     CONFIG.STATE && CONFIG.STATE.LOG
@@ -778,44 +749,20 @@ function checkEnvironment() {
       headers: ["账号", "邮箱", "版权", "主体"],
     },
   ];
-  const errors = [];
-  for (const file of requiredStructures) {
-    if (!fs.existsSync(file.path)) {
-      errors.push(`❌ 文件丢失: ${file.name} (路径: ${file.path})`);
-      continue;
-    }
-    try {
-      const workbook = xlsx.readFile(file.path);
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const jsonData = xlsx.utils.sheet_to_json(sheet, { header: 1 });
-      const actualHeaders = jsonData[0] || [];
-      const missing = file.headers.filter((h) => !actualHeaders.includes(h));
-      if (missing.length > 0) {
-        errors.push(
-          `❌ 文件列缺失: ${file.name} 缺少必要列: [${missing.join(", ")}]`,
-        );
-      }
-    } catch (e) {
-      errors.push(`❌ 文件读取失败: ${file.name} (${e.message})`);
-    }
-  }
 
-  const dirs = [path.dirname(logPath), path.join(process.cwd(), "browser")];
+  ensureDirectories([
+    path.dirname(logPath),
+    path.join(process.cwd(), "browser"),
+  ]);
 
-  dirs.forEach((dir) => {
-    if (!fs.existsSync(dir)) {
-      try {
-        fs.mkdirSync(dir, { recursive: true });
-      } catch (e) {}
-    }
-  });
-  if (errors.length > 0) {
-    console.error("\n\x1b[31m!!! 检测到环境配置错误 !!!\x1b[0m");
-    errors.forEach((err) => console.error(err));
-    console.error("\x1b[31m请修正以上错误后再启动程序。\x1b[0m\n");
+  const { ok, errors } = validateAutomationWorkbookLayout(requiredStructures);
+  if (!ok) {
+    taskUiError("\n\x1b[31m!!! 检测到环境配置错误 !!!\x1b[0m");
+    errors.forEach((err) => taskUiError(err));
+    taskUiError("\x1b[31m请修正以上错误后再启动程序。\x1b[0m\n");
     return false;
   }
-  console.log("✅ 环境检测通过，所有必要文件及表头校验正常。\n");
+  taskUiLog("✅ 环境检测通过，所有必要文件及表头校验正常。\n");
   return true;
 }
 
@@ -823,6 +770,7 @@ function checkEnvironment() {
 
 async function runAutoTask(sender, uiConfig) {
   uiSender = sender;
+  try {
   CONFIG = uiConfig;
   uiSelectedExcelPath = CONFIG.FILES.DRAMA_LIST;
   clearAccountsCache();
@@ -866,13 +814,13 @@ async function runAutoTask(sender, uiConfig) {
 
   try {
     const dramaCount = await getDramaCount();
-    console.log(
+    taskUiLog(
       `\n===========================================================`,
     );
-    console.log(
+    taskUiLog(
       `🚀 任务启动：共选中 ${CONFIG.SELECTED_PROFILES.length} 个方案，总剧集 ${dramaCount} 部`,
     );
-    console.log(`===========================================================`);
+    taskUiLog(`===========================================================`);
 
     await getMaterialFileName();
 
@@ -885,7 +833,7 @@ async function runAutoTask(sender, uiConfig) {
       for (let pIndex = 0; pIndex < CONFIG.SELECTED_PROFILES.length; pIndex++) {
         if (isCancelled) return; // 🛑 拦截点 1
         const profile = CONFIG.SELECTED_PROFILES[pIndex];
-      console.log(`\n\n🔶 [方案切换] 开始方案: 【${profile.name}】`);
+      taskUiLog(`\n\n🔶 [方案切换] 开始方案: 【${profile.name}】`);
 
       CONFIG.FILES.TEMPLATE = profile.TEMPLATE;
       CONFIG.FILES.ACCOUNTS = profile.ACCOUNTS;
@@ -896,7 +844,7 @@ async function runAutoTask(sender, uiConfig) {
         !fs.existsSync(CONFIG.FILES.TEMPLATE) ||
         !fs.existsSync(CONFIG.FILES.ACCOUNTS)
       ) {
-        console.error(`❌ [方案跳过] 【${profile.name}】文件不完整`);
+        taskUiError(`❌ [方案跳过] 【${profile.name}】文件不完整`);
         continue;
       }
 
@@ -912,7 +860,7 @@ async function runAutoTask(sender, uiConfig) {
         const dramaInfo = await loadDramaData(j);
         if (!dramaInfo) continue;
 
-        console.log(
+        taskUiLog(
           `\n🎬 [${profile.name}] 处理剧集 ${j + 1}/${dramaCount}: ${dramaInfo.targetDramaName}`,
         );
 
@@ -945,7 +893,7 @@ async function runAutoTask(sender, uiConfig) {
 
             // 🌟 核心：达到30条触发一次大提交
             if (globalTaskPool.length >= BATCH_THRESHOLD) {
-              console.log(
+              taskUiLog(
                 `\n📦 [蓄水池满] 已积攒 ${BATCH_THRESHOLD} 条，发起批量提交...`,
               );
               await submitBatchTasks(globalTaskPool);
@@ -953,7 +901,7 @@ async function runAutoTask(sender, uiConfig) {
 
               // const coolDown = 2000 + Math.random() * 3000;
               const coolDown = 5000 + Math.random() * 3000;
-              console.log(
+              taskUiLog(
                 `❄️ [频率保护] 提交完毕，进入 ${Math.round(coolDown / 1000)} 秒深度冷却...`,
               );
               await new Promise((res) => setTimeout(res, coolDown));
@@ -974,31 +922,37 @@ async function runAutoTask(sender, uiConfig) {
         );
         if (authDataResult.status !== 1) throw new Error(authDataResult.msg);
       }
-      console.log(`✅ 方案【${profile.name}】预处理完毕！`);
+      taskUiLog(`✅ 方案【${profile.name}】预处理完毕！`);
       if (pIndex < CONFIG.SELECTED_PROFILES.length - 1) {
 
-        const profileCoolDown = 3000 + Math.random() * 3000; 
-        console.log(`\n⏸️ [方案切换缓冲] 休息 ${Math.round(profileCoolDown / 1000)} 秒，准备载入下一个方案...`);
+        const profileCoolDown = 1500 + Math.random() * 3000; 
+        taskUiLog(`\n⏸️ [方案切换缓冲] 休息 ${Math.round(profileCoolDown / 1000)} 秒，准备载入下一个方案...`);
         await new Promise((res) => setTimeout(res, profileCoolDown));
         if (isCancelled) return; // 🌟 方案切换睡眠后拦截
       }
     }
 
     if (isCancelled) {
-      console.log("\n🚫 任务已被手动取消！"); // 👈 修改文案
+      taskUiLog("\n🚫 任务已被手动取消！"); // 👈 修改文案
       return; // 直接退出，不再执行最后的收尾提交
     }
     // --- 🏁 收尾：处理蓄水池里剩下的（不满50条的） ---
     if (globalTaskPool.length > 0) {
-      console.log(
+      taskUiLog(
         `\n📦 [收尾提交] 处理最后剩余的 ${globalTaskPool.length} 条任务...`,
       );
       await submitBatchTasks(globalTaskPool);
     }
 
-    console.log("\n🎉 所有选中的方案队列已全部执行结束");
+    taskUiLog("\n🎉 所有选中的方案队列已全部执行结束");
   } catch (e) {
-    console.error("❌ 程序核心逻辑运行异常:", e.message);
+    taskUiError("❌ 程序核心逻辑运行异常:", e.message);
+  }
+  } catch (e) {
+    taskUiError("❌ [程序异常]", e.message);
+    throw e;
+  } finally {
+    uiSender = null;
   }
 }
 
@@ -1007,6 +961,9 @@ async function runAutoTask(sender, uiConfig) {
 // 🌟 新增：暴露给主进程的停止函数
 function stopAutoTask() {
   isCancelled = true;
+  if (uiSender) {
+    uiSender.send("log-update", "⚠️ 正在取消任务，请稍候...");
+  }
 }
 
 // 🟢 改为 ES Module 导出
