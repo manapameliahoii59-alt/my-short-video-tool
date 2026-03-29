@@ -482,6 +482,14 @@ const handleSaveProfileSets = (val) => {
   }
 };
 
+/** 运行页：全局剧单（清除 / 更换 / 拖拽导入）写回本地并同步主进程 */
+const handleUpdateGlobalDrama = (val) => {
+  settings.value.globalDramaList = val ?? "";
+  if (window.api?.saveSettings) {
+    window.api.saveSettings(JSON.parse(JSON.stringify(settings.value)));
+  }
+};
+
 /** 系统设置子组件回写（显式写 ref，避免根级赋值在部分环境下未落到 settings.value） */
 const applySettingsFromChild = (val) => {
   settings.value = val;
