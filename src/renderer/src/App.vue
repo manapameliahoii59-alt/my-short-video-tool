@@ -104,7 +104,10 @@
         :profile-order="profileOrder"
         :logs="logs"
         :global-drama-list="settings.globalDramaList"
+        :profile-sets="settings.profileSets || []"
+        :working-account="settings.workingAccount"
         @update-global-drama="handleUpdateGlobalDrama"
+        @update-profile-sets="handleSaveProfileSets"
         @run-task="handleRunTask"
         @clear-logs="logs = []"
       />
@@ -122,6 +125,7 @@
         :profile-order="profileOrder"
         :user-key="settings.userKey"
         @update-profiles="updateProfiles"
+        @update-profile-sets="handleSaveProfileSets"
       />
 
       <SettingsTab
