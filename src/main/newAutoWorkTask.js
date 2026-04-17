@@ -302,15 +302,29 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
     });
     if (Array.isArray(accountIds) && accountIds.length == 0)
       throw new Error(`未获取到可用账号`);
-
+    
     const getAccount = await client.post(
       "/adv-vlsc-toutiao/account/queryByAdvertiserIds",
       accountIds,
     );
     const accountData = getAccount.data?.data;
-    if (!accountData) throw new Error(`未获取账户信息,${accountIds}`);
-    let accountList = accountData.map((item) => item.advertiserName);
-    let idsList = accountData.map((item) => item.advertiserId);
+    if (!Array.isArray(accountData) || accountData.length === 0) {
+      throw new Error(
+        `账号库匹配到的账号无效或已失效，请检查账号文件中的「账号」列是否为可用 advertiserId。匹配结果: ${accountIds.join(",")}`,
+      );
+    }
+    let accountList = accountData
+      .map((item) => String(item?.advertiserName || "").trim())
+      .filter(Boolean);
+    let idsList = accountData
+      .map((item) => item?.advertiserId)
+      .filter((id) => id !== undefined && id !== null && String(id).trim() !== "")
+      .map((id) => String(id).trim());
+    if (idsList.length === 0) {
+      throw new Error(
+        `未获取到有效账户ID，请检查账号文件中的「账号」列数据。匹配结果: ${accountIds.join(",")}`,
+      );
+    }
 
     // 🌟 深度拦截睡眠：支持秒取消
     await randomSleep(minTime, maxTime, () => isCancelled);
@@ -827,6 +841,8 @@ async function runAutoTask(sender, uiConfig) {
     isCancelled = false; // 每次启动任务前，重置开关
     let globalTaskPool = []; // 🌟 核心：蓄水池
     const BATCH_THRESHOLD = 50; // 🌟 30条阈值
+    const defaultAccountMatchCount =
+      parseInt(CONFIG.SETTINGS.ACCOUNT_MATCH_COUNT, 10) || 2;
 
     // --- 方案循环 ---
     // for (const profile of CONFIG.SELECTED_PROFILES) {
@@ -838,6 +854,15 @@ async function runAutoTask(sender, uiConfig) {
       CONFIG.FILES.TEMPLATE = profile.TEMPLATE;
       CONFIG.FILES.ACCOUNTS = profile.ACCOUNTS;
       CONFIG.FILES.BUSINESS_TYPE = profile.businessType;
+      const profileMatchCount = parseInt(profile.accountMatchCount, 10);
+      const shouldUseProfileCount =
+        profile.enableCustomAccountMatchCount === true &&
+        Number.isFinite(profileMatchCount) &&
+        profileMatchCount > 0;
+      CONFIG.SETTINGS.ACCOUNT_MATCH_COUNT =
+        shouldUseProfileCount
+          ? profileMatchCount
+          : defaultAccountMatchCount;
       clearAccountsCache();
 
       if (

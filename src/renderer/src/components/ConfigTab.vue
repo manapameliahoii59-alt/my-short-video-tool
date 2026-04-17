@@ -235,6 +235,29 @@
             </div>
           </div>
 
+          <div class="form-row">
+            <div class="form-item half">
+              <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <el-checkbox v-model="editingForm.enableCustomAccountMatchCount">
+                  启用方案独立账户数
+                </el-checkbox>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span class="label-text" style="margin: 0; font-weight: normal;">每次配置</span>
+                  <el-input
+                    v-model="editingForm.accountMatchCount"
+                    type="number"
+                    min="1"
+                    clearable
+                    :disabled="!editingForm.enableCustomAccountMatchCount"
+                    placeholder="x"
+                    style="width: 88px;"
+                  />
+                  <span class="label-text" style="margin: 0; font-weight: normal;">个账户</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <el-divider content-position="left">文件配置</el-divider>
 
           <div
@@ -397,8 +420,12 @@ import { ElMessage, ElMessageBox, ElLoading } from "element-plus";
 defineOptions({
   name: 'ConfigTab'
 })
-const props = defineProps(["allProfiles", "profileOrder", "userKey"]);
+const props = defineProps(["allProfiles", "profileOrder", "userKey", "globalAccountMatchCount"]);
 const emit = defineEmits(["update-profiles", "update-profile-sets"]);
+const getDefaultAccountMatchCount = () => {
+  const n = parseInt(props.globalAccountMatchCount, 10);
+  return Number.isFinite(n) && n > 0 ? n : 2;
+};
 
 const buildNextOrder = (profiles, preferredOrder = null) => {
   const existed = Array.isArray(preferredOrder) && preferredOrder.length > 0
@@ -422,7 +449,8 @@ const searchKeyword = ref("");
 const isSaving = ref(false);
 const isCloudUploading = ref(false);
 const isCloudDownloading = ref(false);
-const collapsedGroups = ref(new Set());
+const collapsedGroups = ref(new Set(["默认分组"]));
+const knownGroupNames = ref(new Set(["默认分组"]));
 const manualEmptyGroups = ref(new Set(["默认分组"]));
 
 // 🌟 记录上一次保存成功的分组
@@ -440,7 +468,9 @@ const getSnapshotString = (profilesObj, emptyGroupsSet) => {
     n: name,
     g: profilesObj[name].group || "默认分组",
     t: profilesObj[name].businessType,
-    f: profilesObj[name].files
+    f: profilesObj[name].files,
+    m: profilesObj[name].accountMatchCount ?? null,
+    em: profilesObj[name].enableCustomAccountMatchCount === true,
   }));
   const groups = Array.from(emptyGroupsSet).sort();
   return JSON.stringify({ p: profileList, g: groups });
@@ -474,6 +504,16 @@ watch(
       if (p.group) newSet.add(p.group);
     });
     manualEmptyGroups.value = newSet;
+    const nextCollapsed = new Set(collapsedGroups.value);
+    const nextKnownGroups = new Set(knownGroupNames.value);
+    newSet.forEach((groupName) => {
+      if (!nextKnownGroups.has(groupName)) {
+        nextKnownGroups.add(groupName);
+        nextCollapsed.add(groupName);
+      }
+    });
+    knownGroupNames.value = nextKnownGroups;
+    collapsedGroups.value = nextCollapsed;
 
     if (!cloudSnapshot.value && Object.keys(newProfiles).length > 0) {
       const initial = getSnapshotString(newProfiles, newSet);
@@ -559,7 +599,13 @@ const groupedProfiles = computed(() => {
 
 const isNewMode = computed(() => !localSelectedName.value || !props.allProfiles[localSelectedName.value]);
 const labelMap = { TEMPLATE: "任务模板", ACCOUNTS: "账号列表" };
-const editingForm = reactive({ group: "默认分组", businessType: "端原生-付费短剧", files: { TEMPLATE: "", ACCOUNTS: "" } });
+const editingForm = reactive({
+  group: "默认分组",
+  businessType: "端原生-付费短剧",
+  enableCustomAccountMatchCount: false,
+  accountMatchCount: String(getDefaultAccountMatchCount()),
+  files: { TEMPLATE: "", ACCOUNTS: "" }
+});
 
 // 🌟 修改点 1：初始化新方案时，默认使用上一次成功保存的分组
 const initNewProfile = () => { 
@@ -567,6 +613,8 @@ const initNewProfile = () => {
   targetName.value = ""; 
   editingForm.group = lastSavedGroup.value; // 👈 这里改用记录的变量
   editingForm.businessType = "端原生-付费短剧"; 
+  editingForm.enableCustomAccountMatchCount = false;
+  editingForm.accountMatchCount = String(getDefaultAccountMatchCount());
   editingForm.files = { TEMPLATE: "", ACCOUNTS: "" }; 
 };
 
@@ -643,6 +691,15 @@ const selectProfile = (n) => {
     const p = props.allProfiles[n];
     editingForm.group = p.group || "默认分组";
     editingForm.businessType = p.businessType;
+    const fallbackEnable = p.accountMatchCount != null;
+    editingForm.enableCustomAccountMatchCount =
+      p.enableCustomAccountMatchCount == null
+        ? fallbackEnable
+        : p.enableCustomAccountMatchCount === true;
+    editingForm.accountMatchCount =
+      p.accountMatchCount == null
+        ? String(getDefaultAccountMatchCount())
+        : String(p.accountMatchCount);
     editingForm.files = { ...p.files };
   }
 };
@@ -707,6 +764,23 @@ const handleMainSave = async () => {
   isSaving.value = true;
   const loading = ElLoading.service({ target: ".detail-card", text: "保存中..." });
   try {
+    const p = JSON.parse(JSON.stringify(props.allProfiles));
+    const oldName = localSelectedName.value;
+    const creatingNew = !oldName || !Object.prototype.hasOwnProperty.call(p, oldName);
+
+    // 防止新建/改名时覆盖已有方案
+    if ((creatingNew || oldName !== nName) && Object.prototype.hasOwnProperty.call(p, nName)) {
+      throw new Error(`方案名 [${nName}] 已存在，请更换名称`);
+    }
+
+    // 编辑改名时，先迁移物理目录，再更新配置，避免“配置改了但目录没改”
+    if (!creatingNew && oldName !== nName) {
+      const renameRes = await window.api.renameProfileFolder({ oldName, newName: nName });
+      if (!renameRes?.success) {
+        throw new Error(renameRes?.msg || "重命名方案目录失败");
+      }
+    }
+
     const finalFiles = { ...editingForm.files };
     for (const key in finalFiles) {
       const src = finalFiles[key];
@@ -715,10 +789,23 @@ const handleMainSave = async () => {
         if (res.success) finalFiles[key] = res.fileName; else throw new Error(res.msg);
       }
     }
-    const p = JSON.parse(JSON.stringify(props.allProfiles));
-    const oldName = localSelectedName.value;
-    const creatingNew = !oldName || !Object.prototype.hasOwnProperty.call(p, oldName);
-    const newProfileData = { ...editingForm, files: finalFiles };
+    let normalizedMatchCount = null;
+    if (editingForm.enableCustomAccountMatchCount) {
+      if (editingForm.accountMatchCount === "" || editingForm.accountMatchCount == null) {
+        throw new Error("已启用方案独立账户数时，请填写 x（每次配置的账户数量）");
+      }
+      const parsedCount = parseInt(editingForm.accountMatchCount, 10);
+      if (!Number.isFinite(parsedCount) || parsedCount < 1) {
+        throw new Error("账号匹配数必须是大于等于 1 的整数，或留空使用系统默认值");
+      }
+      normalizedMatchCount = parsedCount;
+    }
+    const newProfileData = {
+      ...editingForm,
+      enableCustomAccountMatchCount: editingForm.enableCustomAccountMatchCount === true,
+      accountMatchCount: normalizedMatchCount,
+      files: finalFiles,
+    };
     const baseOrder = Array.isArray(props.profileOrder) && props.profileOrder.length > 0
       ? props.profileOrder.filter(name => p[name])
       : Object.keys(p);

@@ -34,6 +34,8 @@ const api = {
 
   deleteProfileFolder: (profileName) =>
     ipcRenderer.invoke("delete-profile-folder", profileName),
+  renameProfileFolder: (payload) =>
+    ipcRenderer.invoke("rename-profile-folder", payload),
 
   // --- 云端同步 ---
   cloudSave: (data) => ipcRenderer.invoke("cloud:save-profiles", data),

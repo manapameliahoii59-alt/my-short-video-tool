@@ -533,6 +533,29 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle("rename-profile-folder", async (_event, payload) => {
+    try {
+      const oldName = typeof payload?.oldName === "string" ? payload.oldName.trim() : "";
+      const newName = typeof payload?.newName === "string" ? payload.newName.trim() : "";
+      if (!oldName || !newName) return { success: false, msg: "方案名不能为空" };
+      if (oldName === newName) return { success: true };
+
+      const oldDir = join(PROFILES_DIR, oldName);
+      const newDir = join(PROFILES_DIR, newName);
+      if (fs.existsSync(newDir)) {
+        return { success: false, msg: `目标方案目录已存在: ${newName}` };
+      }
+      if (!fs.existsSync(oldDir)) {
+        return { success: true };
+      }
+
+      await fs.promises.rename(oldDir, newDir);
+      return { success: true };
+    } catch (error) {
+      return { success: false, msg: error.message };
+    }
+  });
+
   ipcMain.handle("open-file-external", async (event, payload) => {
     try {
       let targetPath = payload;
@@ -623,6 +646,8 @@ app.whenReady().then(() => {
       return {
         name: profileName,
         businessType: pData.businessType,
+        enableCustomAccountMatchCount: pData.enableCustomAccountMatchCount === true,
+        accountMatchCount: pData.accountMatchCount ?? null,
         TEMPLATE: join(profileFolder, pData.files.TEMPLATE),
         ACCOUNTS: join(profileFolder, pData.files.ACCOUNTS),
       };

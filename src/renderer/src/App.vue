@@ -124,6 +124,7 @@
         :all-profiles="allProfiles"
         :profile-order="profileOrder"
         :user-key="settings.userKey"
+        :global-account-match-count="settings.accountMatchCount"
         @update-profiles="updateProfiles"
         @update-profile-sets="handleSaveProfileSets"
       />
