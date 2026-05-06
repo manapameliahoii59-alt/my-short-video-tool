@@ -316,7 +316,7 @@
 
               <div v-else class="placeholder-info">
                 <el-icon class="upload-icon"><UploadFilled /></el-icon>
-                <div class="text">点击或拖拽文件</div>
+                <div class="text">点击或拖拽 Excel（.xlsx / .xls）</div>
               </div>
             </div>
           </div>
@@ -750,12 +750,30 @@ const toggleGroup = (g) => { const s = new Set(collapsedGroups.value); if (s.has
 
 // --- 文件处理与保存 ---
 const getFileName = (path) => (path ? path.split(/[\\/]/).pop() : "");
+const isExcelPath = (pathOrName) => {
+  const name = getFileName(pathOrName || "");
+  const lower = name.toLowerCase();
+  return lower.endsWith(".xlsx") || lower.endsWith(".xls");
+};
 const openFolder = (n) => window.api.openProfileFolder(n);
-const triggerFileSelect = async (k) => { const s = await window.api.openFile(); if (s) editingForm.files[k] = s; };
+const triggerFileSelect = async (k) => {
+  const s = await window.api.openFile();
+  if (!s) return;
+  if (!isExcelPath(s)) {
+    ElMessage.warning("仅支持 Excel 文件（.xlsx / .xls）");
+    return;
+  }
+  editingForm.files[k] = s;
+};
 const onDropZoneDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; };
 const handleFileDrop = (e, k) => {
   const f = e.dataTransfer?.files[0];
-  if (f) editingForm.files[k] = window.api?.getFilePath ? window.api.getFilePath(f) : f.path;
+  if (!f) return;
+  if (!isExcelPath(f.name)) {
+    ElMessage.warning("仅支持 Excel 文件（.xlsx / .xls）");
+    return;
+  }
+  editingForm.files[k] = window.api?.getFilePath ? window.api.getFilePath(f) : f.path;
 };
 
 const handleMainSave = async () => {
@@ -785,6 +803,9 @@ const handleMainSave = async () => {
     for (const key in finalFiles) {
       const src = finalFiles[key];
       if (src && (src.includes(":") || src.includes("/"))) {
+        if (!isExcelPath(src)) {
+          throw new Error("仅支持 Excel 文件（.xlsx / .xls），请更换后重试");
+        }
         const res = await window.api.importFile({ profileName: nName, sourcePath: src });
         if (res.success) finalFiles[key] = res.fileName; else throw new Error(res.msg);
       }
