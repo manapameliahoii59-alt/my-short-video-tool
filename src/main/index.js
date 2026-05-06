@@ -15,16 +15,131 @@ const getAppRootDir = () => {
   return app.getPath("userData");
 };
 
-const DATA_ROOT = join(getAppRootDir(), "ZS_Assistant_Storage");
+const getAppInstanceId = () => {
+  const argv = process.argv || [];
+  const rawArg =
+    argv.find((arg) => typeof arg === "string" && arg.startsWith("--instance=")) ||
+    (argv.includes("--instance")
+      ? argv[argv.indexOf("--instance") + 1]
+      : "");
+  const value = String(rawArg || "").replace("--instance=", "").trim().toLowerCase();
+  if (!value || value === "default" || value === "main" || value === "a") return "";
+  return value.replace(/[^a-z0-9_-]/g, "").slice(0, 32);
+};
+
+const APP_INSTANCE_ID = getAppInstanceId();
+const STORAGE_BASE_DIR = join(getAppRootDir(), "ZS_Assistant_Storage");
+const DATA_ROOT = APP_INSTANCE_ID ? join(STORAGE_BASE_DIR, `instance_${APP_INSTANCE_ID}`) : STORAGE_BASE_DIR;
 const PROFILES_DIR = join(DATA_ROOT, "profiles_records");
 const USER_DATA_PATH = join(DATA_ROOT, "zs_user_config.json");
 
 if (!fs.existsSync(DATA_ROOT)) fs.mkdirSync(DATA_ROOT, { recursive: true });
 if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR, { recursive: true });
 
+const ALLOWED_INSTANCE_IDS = new Set(["", "b"]);
+const INSTANCE_SLOT_NAME = APP_INSTANCE_ID || "default";
+const INSTANCE_LOCK_FILE = join(STORAGE_BASE_DIR, `.instance-${INSTANCE_SLOT_NAME}.lock`);
+let instanceLockFd = null;
+
+const isPidAlive = (pid) => {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+};
+
+const tryAcquireInstanceLock = () => {
+  if (!fs.existsSync(STORAGE_BASE_DIR)) {
+    fs.mkdirSync(STORAGE_BASE_DIR, { recursive: true });
+  }
+
+  if (fs.existsSync(INSTANCE_LOCK_FILE)) {
+    try {
+      const oldPid = parseInt(fs.readFileSync(INSTANCE_LOCK_FILE, "utf-8").trim(), 10);
+      if (isPidAlive(oldPid)) return false;
+      fs.unlinkSync(INSTANCE_LOCK_FILE);
+    } catch (_error) {
+      try {
+        fs.unlinkSync(INSTANCE_LOCK_FILE);
+      } catch (_innerError) {}
+    }
+  }
+
+  try {
+    instanceLockFd = fs.openSync(INSTANCE_LOCK_FILE, "wx");
+    fs.writeFileSync(INSTANCE_LOCK_FILE, String(process.pid), "utf-8");
+    return true;
+  } catch (_error) {
+    return false;
+  }
+};
+
+const releaseInstanceLock = () => {
+  try {
+    if (instanceLockFd !== null) {
+      fs.closeSync(instanceLockFd);
+      instanceLockFd = null;
+    }
+  } catch (_error) {}
+  try {
+    if (fs.existsSync(INSTANCE_LOCK_FILE)) {
+      fs.unlinkSync(INSTANCE_LOCK_FILE);
+    }
+  } catch (_error) {}
+};
+
+app.on("before-quit", () => {
+  releaseInstanceLock();
+});
+
 let userData = {};
 let globalUiSender = null;
 let autoFetchTimer = null; 
+
+const tryCreateNormalizedTableSidecar = (targetPath) => {
+  try {
+    const ext = path.extname(targetPath).toLowerCase();
+    if (![".xlsx", ".xls", ".csv", ".json"].includes(ext)) return;
+
+    const sidecarPath = `${targetPath}.normalized.json`;
+    let rows = [];
+    let headers = [];
+
+    if (ext === ".json") {
+      const raw = fs.readFileSync(targetPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        rows = parsed;
+      } else if (Array.isArray(parsed?.rows)) {
+        rows = parsed.rows;
+      } else {
+        return;
+      }
+      headers = Array.isArray(parsed?.headers)
+        ? parsed.headers
+        : (rows[0] ? Object.keys(rows[0]) : []);
+    } else {
+      const workbook = xlsx.readFile(targetPath);
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      headers = (xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || []).map((v) => String(v).trim());
+      rows = xlsx.utils.sheet_to_json(sheet, { defval: "", raw: false });
+    }
+
+    const payload = {
+      version: 1,
+      sourceFile: path.basename(targetPath),
+      generatedAt: new Date().toISOString(),
+      headers,
+      rows,
+    };
+    fs.writeFileSync(sidecarPath, JSON.stringify(payload, null, 2), "utf-8");
+  } catch (error) {
+    console.warn(`⚠️ 生成标准化侧车文件失败: ${error.message}`);
+  }
+};
 
 
 
@@ -181,12 +296,22 @@ function saveUserData() {
   }
 }
 
+function buildInitSettingsPayload(isUpdated = false) {
+  return {
+    ...userData,
+    appVersion: app.getVersion(),
+    instanceId: APP_INSTANCE_ID,
+    isUpdated,
+  };
+}
+
 function createWindow() {
+  const instanceTag = APP_INSTANCE_ID ? ` [${APP_INSTANCE_ID}]` : "";
   const mainWindow = new BrowserWindow({
     width: 1050,
     height: 750,
     show: false,
-    title: `漫剧神器 v${app.getVersion()}`,
+    title: `漫剧神器${instanceTag} v${app.getVersion()}`,
     autoHideMenuBar: true,
     ...(process.platform === "linux" ? { icon: join(__dirname, "../../build/icon.png") } : {}),
     webPreferences: {
@@ -208,9 +333,7 @@ function createWindow() {
     }
 
     mainWindow.webContents.send("init-settings", {
-      ...userData,
-      appVersion: app.getVersion(),
-      isUpdated: isFirstRunAfterUpdate, 
+      ...buildInitSettingsPayload(isFirstRunAfterUpdate),
     });
   });
 
@@ -227,9 +350,27 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (!ALLOWED_INSTANCE_IDS.has(APP_INSTANCE_ID)) {
+    dialog.showErrorBox(
+      "实例启动受限",
+      "当前版本仅允许双开：默认实例和 b 实例。\n请使用默认启动，或使用参数 --instance=b。",
+    );
+    app.quit();
+    return;
+  }
+
+  if (!tryAcquireInstanceLock()) {
+    dialog.showErrorBox(
+      "实例已在运行",
+      `实例 [${INSTANCE_SLOT_NAME}] 已经启动，当前版本最多只能双开（default + b）。`,
+    );
+    app.quit();
+    return;
+  }
+
   loadUserData(); 
 
-  electronApp.setAppUserModelId("com.electron");
+  electronApp.setAppUserModelId(APP_INSTANCE_ID ? `com.electron.${APP_INSTANCE_ID}` : "com.electron");
   app.on("browser-window-created", (_, window) => {
     optimizer.watchWindowShortcuts(window);
   });
@@ -494,7 +635,12 @@ app.whenReady().then(() => {
   ipcMain.handle("dialog:openFile", async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       properties: ["openFile"],
-      filters: [{ name: "Excel Files", extensions: ["xlsx", "xls"] }],
+      filters: [
+        { name: "表格或配置文件", extensions: ["xlsx", "xls", "csv", "json"] },
+        { name: "Excel Files", extensions: ["xlsx", "xls"] },
+        { name: "CSV Files", extensions: ["csv"] },
+        { name: "JSON Files", extensions: ["json"] },
+      ],
     });
     return canceled ? null : filePaths[0];
   });
@@ -508,6 +654,7 @@ app.whenReady().then(() => {
         const fileName = path.basename(sourcePath);
         const targetPath = join(targetFolder, fileName);
         fs.copyFileSync(sourcePath, targetPath);
+        tryCreateNormalizedTableSidecar(targetPath);
 
         return { success: true, fileName: fileName };
       } catch (err) {
@@ -662,6 +809,9 @@ app.whenReady().then(() => {
 
     if (!RUNTIME_CONFIG.SETTINGS) RUNTIME_CONFIG.SETTINGS = {};
     RUNTIME_CONFIG.SETTINGS.ACCOUNT_MATCH_COUNT = uiConfig.accountMatchCount ?? 2;
+    // 双开时对 b 实例做温和降速，降低接口并发峰值
+    RUNTIME_CONFIG.SETTINGS.REQUEST_THROTTLE_MULTIPLIER = APP_INSTANCE_ID === "b" ? 3 : 1;
+    RUNTIME_CONFIG.SETTINGS.BATCH_THRESHOLD = 50;
     RUNTIME_CONFIG.session = userData.session;
 
     try {
@@ -840,6 +990,11 @@ app.whenReady().then(() => {
   ipcMain.handle("dialog:showMessage", async (event, options) => {
     const result = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender), options);
     return result.response;
+  });
+
+  ipcMain.handle("settings:reload-current-instance", async () => {
+    loadUserData();
+    return buildInitSettingsPayload(false);
   });
 
   ipcMain.handle("download-drama-template", async (event) => {

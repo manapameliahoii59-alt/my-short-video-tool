@@ -3,15 +3,32 @@
     <nav>
       <div class="nav-header">
         <h2>漫剧神器 v{{ appVersion }}</h2>
+        <div class="instance-badge">
+          当前实例：{{ instanceDisplayName }}
+        </div>
+        <div class="instance-sync-text">
+          配置状态：{{ refreshStatusText }}
+        </div>
         <el-button
           type="primary"
           link
           size="small"
-          style="margin-top: 8px; color: #a0cfff; font-size: 12px; width: 120px; justify-content: center;"
+          style="margin-top: 6px; color: #a0cfff; font-size: 12px; width: 120px; justify-content: center;"
+          :disabled="isRefreshingInstance"
+          @click="refreshCurrentInstanceSettings"
+        >
+          <el-icon v-if="isRefreshingInstance" class="is-loading"><Loading /></el-icon>
+          <span>{{ isRefreshingInstance ? "刷新中..." : "[刷新当前实例]" }}</span>
+        </el-button>
+        <el-button
+          type="primary"
+          link
+          size="small"
+          style="margin-top: 6px; color: #a0cfff; font-size: 12px; width: 120px; justify-content: center;"
           :disabled="isCheckingUpdate"
           @click="manualCheckUpdate"
         >
-          <el-icon v-if="isCheckingUpdate" class="is-loading" style="margin-right: 4px;"><Loading /></el-icon>
+          <el-icon v-if="isCheckingUpdate" class="is-loading"><Loading /></el-icon>
           <span>{{ isCheckingUpdate ? '正在检测...' : '[手动检查新版本]' }}</span>
         </el-button>
       </div>
@@ -211,7 +228,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, onMounted, onUnmounted, computed } from "vue";
 import { VideoPlay, Setting, Tools, Loading, DataLine } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
@@ -239,7 +256,15 @@ const settings = ref({
 });
 const lastConfig = ref({});
 const appVersion = ref("1.0.0"); 
+const instanceId = ref("");
 const isRunning = ref(false);
+const instanceDisplayName = computed(() => (instanceId.value ? instanceId.value : "默认"));
+const isRefreshingInstance = ref(false);
+const lastRefreshAt = ref("");
+const refreshStatusText = computed(() => {
+  if (isRefreshingInstance.value) return "正在刷新";
+  return lastRefreshAt.value ? `已同步 (${lastRefreshAt.value})` : "待同步";
+});
 
 // 🌟 新增：记录巡航状态，用于锁定页面
 const isCruiseRunning = ref(false); 
@@ -338,42 +363,64 @@ function pruneProfileSetsAgainstProfiles(sets, existingKeySet) {
   return { pruned, changed };
 }
 
+const applyInitSettingsData = (data) => {
+  if (!data) return;
+  if (data.profiles) allProfiles.value = data.profiles;
+  profileOrder.value = Array.isArray(data.profileOrder) ? data.profileOrder : Object.keys(data.profiles || {});
+  if (data.lastConfig) lastConfig.value = data.lastConfig;
+
+  const existingKeys = new Set(Object.keys(data.profiles || {}));
+  let profileSets = Array.isArray(data.profileSets) ? data.profileSets : [];
+  const profileSetsPrune = pruneProfileSetsAgainstProfiles(profileSets, existingKeys);
+  if (profileSetsPrune.changed) profileSets = profileSetsPrune.pruned;
+
+  settings.value = {
+    userKey: data.KEY_CONFIG?.userKey || "",
+    workingAccount:
+      data.WORKING_CONFIG?.account || data.WORKING_CONFIG?.acount || "",
+    workingPassword: data.WORKING_CONFIG?.password || "",
+    globalDramaList: data.FILES?.globalDramaList || "",
+    accountMatchCount: data.SETTINGS?.ACCOUNT_MATCH_COUNT || 2,
+    pageNum: data.FILES?.PAGE_NUM || 20,
+    projectNum: data.FILES?.PROJECT_NUM ?? 1,
+    adsNum: data.FILES?.ADS_NUM ?? 1,
+    isAccountFlat: data.FILES?.isAccountFlat || false,
+    dateRange: data.FILES?.dateRange || "",
+    profileSets,
+  };
+  if (profileSetsPrune.changed && window.api?.saveSettings) {
+    window.api.saveSettings(JSON.parse(JSON.stringify(settings.value)));
+  }
+  if (data.appVersion) {
+    appVersion.value = data.appVersion;
+  }
+  instanceId.value = (data.instanceId || "").toString().trim();
+  lastRefreshAt.value = new Date().toLocaleTimeString();
+};
+
+const refreshCurrentInstanceSettings = async () => {
+  if (!window.api?.reloadCurrentInstanceSettings) {
+    ElMessage.warning("当前版本不支持实例刷新");
+    return;
+  }
+  try {
+    isRefreshingInstance.value = true;
+    const data = await window.api.reloadCurrentInstanceSettings();
+    applyInitSettingsData(data);
+    ElMessage.success("当前实例配置已刷新");
+  } catch (error) {
+    ElMessage.error(`刷新失败: ${error.message || error}`);
+  } finally {
+    isRefreshingInstance.value = false;
+  }
+};
+
 // --- 生命周期：初始化数据接收 ---
 onMounted(() => {
   // 1. 监听主进程发来的初始化数据
   window.api.onInitSettings((data) => {
     console.log("📖 收到初始化数据:", data);
-
-    if (data.profiles) allProfiles.value = data.profiles;
-    profileOrder.value = Array.isArray(data.profileOrder) ? data.profileOrder : Object.keys(data.profiles || {});
-    if (data.lastConfig) lastConfig.value = data.lastConfig;
-
-    const existingKeys = new Set(Object.keys(data.profiles || {}));
-    let profileSets = Array.isArray(data.profileSets) ? data.profileSets : [];
-    const profileSetsPrune = pruneProfileSetsAgainstProfiles(profileSets, existingKeys);
-    if (profileSetsPrune.changed) profileSets = profileSetsPrune.pruned;
-
-    settings.value = {
-      userKey: data.KEY_CONFIG?.userKey || "",
-      workingAccount:
-        data.WORKING_CONFIG?.account || data.WORKING_CONFIG?.acount || "",
-      workingPassword: data.WORKING_CONFIG?.password || "",
-
-      globalDramaList: data.FILES?.globalDramaList || "",
-      accountMatchCount: data.SETTINGS?.ACCOUNT_MATCH_COUNT || 2,
-      pageNum: data.FILES?.PAGE_NUM || 20,
-      projectNum: data.FILES?.PROJECT_NUM ?? 1,
-      adsNum: data.FILES?.ADS_NUM ?? 1,
-      isAccountFlat: data.FILES?.isAccountFlat || false,
-      dateRange: data.FILES?.dateRange || "",
-      profileSets,
-    };
-    if (profileSetsPrune.changed && window.api?.saveSettings) {
-      window.api.saveSettings(JSON.parse(JSON.stringify(settings.value)));
-    }
-    if (data.appVersion) {
-      appVersion.value = data.appVersion;
-    }
+    applyInitSettingsData(data);
 
     if (data.isUpdated) {
       showUpdateLog.value = true;
@@ -429,7 +476,7 @@ onMounted(() => {
         })
         .catch(() => {});
     } else if (data.type === "latest") {
-      ElMessage.success("恭喜，当前已经是最新版本！");
+      ElMessage.success("当前已经是最新版本！");
     } else if (data.type === "error") {
       isDownloading.value = false;
       ElMessage.error(`更新包下载失败: ${data.msg}`);
@@ -601,6 +648,23 @@ nav {
   font-size: 16px;
   color: #ecf0f1;
   margin: 0;
+}
+
+.instance-badge {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #bfd6f6;
+  background: rgba(64, 158, 255, 0.18);
+  border: 1px solid rgba(64, 158, 255, 0.35);
+  border-radius: 12px;
+  padding: 2px 10px;
+  display: inline-block;
+}
+
+.instance-sync-text {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #9ab3d6;
 }
 
 .nav-item {

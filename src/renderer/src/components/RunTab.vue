@@ -177,6 +177,7 @@
           <el-radio value="publish" size="large">
             <span style="color: #f56c6c; font-weight: bold">正式发布</span>
           </el-radio>
+          <el-radio value="publishBeta" size="large">正式发布(Beta版)</el-radio>
           <el-radio value="cancel" size="large">测试模式</el-radio>
         </el-radio-group>
       </div>
@@ -280,7 +281,7 @@ const selectedProfiles = ref([]);
 const logRef = ref(null);
 const isDragging = ref(false);
 
-const form = reactive({ action: "publish" });
+const form = reactive({ action: "publishBeta" });
 
 const selectedProfileSetId = ref("");
 const applyingProfileSet = ref(false);

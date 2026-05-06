@@ -338,6 +338,66 @@ function getDateRangeByType(type) {
 // 模块级缓存变量
 let accountsCache = null;
 
+const readRowsFromJsonPayload = (filePath) => {
+  const content = fs.readFileSync(filePath, "utf-8");
+  const parsed = JSON.parse(content);
+  if (Array.isArray(parsed)) return parsed;
+  if (Array.isArray(parsed?.rows)) return parsed.rows;
+  return [];
+};
+
+const getNormalizedSidecarPath = (filePath) => `${filePath}.normalized.json`;
+
+function readTabularRows(filePath) {
+  try {
+    const sidecarPath = getNormalizedSidecarPath(filePath);
+    if (fs.existsSync(sidecarPath)) {
+      return readRowsFromJsonPayload(sidecarPath);
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === ".json") {
+      return readRowsFromJsonPayload(filePath);
+    }
+
+    const workbook = xlsx.readFile(filePath);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    return xlsx.utils.sheet_to_json(sheet, { defval: "", raw: false });
+  } catch (error) {
+    console.error(`❌ 读取表格数据失败: ${error.message}`);
+    return [];
+  }
+}
+
+function readTabularHeaders(filePath) {
+  try {
+    const sidecarPath = getNormalizedSidecarPath(filePath);
+    if (fs.existsSync(sidecarPath)) {
+      const content = fs.readFileSync(sidecarPath, "utf-8");
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed?.headers)) {
+        return parsed.headers.map((v) => String(v).trim());
+      }
+      const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
+      return rows[0] ? Object.keys(rows[0]) : [];
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === ".json") {
+      const rows = readRowsFromJsonPayload(filePath);
+      return rows[0] ? Object.keys(rows[0]) : [];
+    }
+
+    const workbook = xlsx.readFile(filePath);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    return (xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || []).map((v) =>
+      String(v).trim(),
+    );
+  } catch (_error) {
+    return [];
+  }
+}
+
 /**
  * 从内存或硬盘获取账号全量数据
  * @param {string} filePath 账号 Excel 的绝对路径
@@ -347,13 +407,9 @@ function getCachedAccounts(filePath) {
     return accountsCache;
   }
 
-  console.log("📂 [工具类] 正在读取账号库 Excel 到内存...");
+  console.log("📂 [工具类] 正在读取账号库文件到内存...");
   try {
-    const workbook = xlsx.readFile(filePath);
-    const rows = xlsx.utils.sheet_to_json(
-      workbook.Sheets[workbook.SheetNames[0]],
-      { defval: "", raw: false }, // raw: false 防止长数字变为科学计数法
-    );
+    const rows = readTabularRows(filePath);
     accountsCache = rows;
     console.log(`✅ 账号库加载完毕，共 ${rows.length} 条记录。`);
     return rows;
@@ -551,10 +607,7 @@ function validateAutomationWorkbookLayout(specs) {
       continue;
     }
     try {
-      const workbook = xlsx.readFile(file.path);
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const jsonData = xlsx.utils.sheet_to_json(sheet, { header: 1 });
-      const actualHeaders = jsonData[0] || [];
+      const actualHeaders = readTabularHeaders(file.path);
       const missing = file.headers.filter((h) => !actualHeaders.includes(h));
       if (missing.length > 0) {
         errors.push(
@@ -602,4 +655,5 @@ export {
   findMaterialFolderByName,
   validateAutomationWorkbookLayout,
   ensureDirectories,
+  readTabularRows,
 };

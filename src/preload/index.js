@@ -59,6 +59,8 @@ const api = {
     ipcRenderer.on("init-settings", sub);
     return () => ipcRenderer.removeListener("init-settings", sub);
   },
+  reloadCurrentInstanceSettings: () =>
+    ipcRenderer.invoke("settings:reload-current-instance"),
   downloadDramaTemplate: () => ipcRenderer.invoke("download-drama-template"),
 
   //更新控制接口

@@ -1,6 +1,5 @@
 /* eslint-disable */
 import axios from "axios";
-import xlsx from "xlsx";
 import fs from "fs";
 import path from "path";
 import util from "util";
@@ -31,6 +30,7 @@ import {
   findMaterialFolderByName,
   validateAutomationWorkbookLayout,
   ensureDirectories,
+  readTabularRows,
 } from "./utils";
 
 let uiSender = null;
@@ -38,6 +38,25 @@ let CONFIG = null;
 let uiSelectedExcelPath = null;
 // 🌟 新增：中断开关
 let isCancelled = false;
+let requestThrottleMultiplier = 1;
+
+const throttleMs = (ms) => {
+  const n = Number(ms) || 0;
+  return Math.max(0, Math.round(n * requestThrottleMultiplier));
+};
+
+const sleepWithThrottle = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, throttleMs(ms)));
+
+const randomSleepWithThrottle = (min, max, getCancelStatus) => {
+  const scaledMin = throttleMs(min);
+  const scaledMax = throttleMs(max);
+  return randomSleep(
+    Math.min(scaledMin, scaledMax),
+    Math.max(scaledMin, scaledMax),
+    getCancelStatus,
+  );
+};
 
 // 保留终端输出用的原始 console 方法（避免劫持主进程全局 console）
 const c = console;
@@ -313,7 +332,7 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
         `账号库匹配到的账号无效或已失效，请检查账号文件中的「账号」列是否为可用 advertiserId。匹配结果: ${accountIds.join(",")}`,
       );
     }
-    let accountList = accountData
+    let accountListName = accountData
       .map((item) => String(item?.advertiserName || "").trim())
       .filter(Boolean);
     let idsList = accountData
@@ -326,8 +345,16 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       );
     }
 
+
+    const accListData = accountData.map(ele => ({
+      id: ele.advertiserId,
+      name: ele.advertiserName,
+      uniqueId: ele.advertiserId,
+      company: ele.company,
+    }));
+
     // 🌟 深度拦截睡眠：支持秒取消
-    await randomSleep(minTime, maxTime, () => isCancelled);
+    await randomSleepWithThrottle(minTime, maxTime, () => isCancelled);
     if (isCancelled) return null;
 
     // --- 4. 🌟 核心优化：获取素材并加入缓存池 ---
@@ -495,8 +522,13 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
     );
     let materialsSize = Math.min(materials.length, 30);
 
+
+    let isBeta = CONFIG.SETTINGS.ACTION == 'publishBeta';
+    const typeVal = isBeta?'4':"0";
     const payload1 = {
-      type: 0,
+      type:typeVal,
+      // type: "4",//beta版本
+      // type: 0,
       bookName: productInfo.bookName,
       bookId: productInfo.bookId,
       source: productInfo.source,
@@ -535,9 +567,11 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       materialNum: materialsSize,
       materialInfo: materialInfoData,
       advertiserIds: JSON.stringify(idsList),
-      advertiserNames: JSON.stringify(accountList),
+      advertiserNames: JSON.stringify(accountListName),
       publishName: finalPublishName,
+      accountList: JSON.stringify(accListData),
     };
+    
 
     if (CONFIG.FILES.isAccountFlat) {
       payload1.strategyType = 2;
@@ -567,7 +601,8 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
 async function submitBatchTasks(taskList) {
   if (!taskList || taskList.length === 0) return;
 
-  const isPublish = CONFIG.SETTINGS.ACTION === "publish";
+  // const isPublish = CONFIG.SETTINGS.ACTION === "publish";
+  const isPublish = CONFIG.SETTINGS.ACTION?.includes("publish");
 
   taskUiLog(
     `\n🚀 [${isPublish ? "正式发布" : "测试模式"}] 开始处理 ${taskList.length} 个任务...`,
@@ -629,7 +664,7 @@ async function submitBatchTasks(taskList) {
 
     taskUiLog(`⏳ 模板已就绪，正在缓冲等待，准备最终提交...`);
     // await randomSleep(minTime, maxTime);
-    await randomSleep(1000, 2000);
+    await randomSleepWithThrottle(1000, 2000);
 
     taskUiLog(
       "\n-------------------------------------------------------------",
@@ -696,17 +731,12 @@ async function submitBatchTasks(taskList) {
   }
 }
 async function getDramaCount() {
-  const workbook = xlsx.readFile(CONFIG.FILES.DRAMA_LIST);
-  return xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]])
-    .length;
+  return readTabularRows(CONFIG.FILES.DRAMA_LIST).length;
 }
 
 async function loadDramaData(index) {
   const filePath = uiSelectedExcelPath || CONFIG.FILES.DRAMA_LIST;
-  const workbook = xlsx.readFile(filePath);
-  const data = xlsx.utils.sheet_to_json(
-    workbook.Sheets[workbook.SheetNames[0]],
-  );
+  const data = readTabularRows(filePath);
   if (!data[index]) return null;
   const row = data[index];
   let DRAMA_FIELD_NAMES = CONFIG.DRAMA_FIELD_NAMES;
@@ -783,6 +813,7 @@ function checkEnvironment() {
 
 
 async function runAutoTask(sender, uiConfig) {
+  
   uiSender = sender;
   try {
   CONFIG = uiConfig;
@@ -840,7 +871,12 @@ async function runAutoTask(sender, uiConfig) {
 
     isCancelled = false; // 每次启动任务前，重置开关
     let globalTaskPool = []; // 🌟 核心：蓄水池
-    const BATCH_THRESHOLD = 50; // 🌟 30条阈值
+    const BATCH_THRESHOLD = parseInt(CONFIG.SETTINGS.BATCH_THRESHOLD, 10) || 50;
+    requestThrottleMultiplier = Number(CONFIG.SETTINGS.REQUEST_THROTTLE_MULTIPLIER) || 1;
+    if (requestThrottleMultiplier < 1) requestThrottleMultiplier = 1;
+    taskUiLog(
+      `⚙️ 运行节流系数: x${requestThrottleMultiplier.toFixed(2)} | 批次阈值: ${BATCH_THRESHOLD}`,
+    );
     const defaultAccountMatchCount =
       parseInt(CONFIG.SETTINGS.ACCOUNT_MATCH_COUNT, 10) || 2;
 
@@ -873,10 +909,7 @@ async function runAutoTask(sender, uiConfig) {
         continue;
       }
 
-      const workbookTemplate = xlsx.readFile(CONFIG.FILES.TEMPLATE);
-      const allTemplates = xlsx.utils.sheet_to_json(
-        workbookTemplate.Sheets[workbookTemplate.SheetNames[0]],
-      );
+      const allTemplates = readTabularRows(CONFIG.FILES.TEMPLATE);
       const templateRowCount = allTemplates.length;
 
       // --- 剧集循环 ---
@@ -929,7 +962,7 @@ async function runAutoTask(sender, uiConfig) {
               taskUiLog(
                 `❄️ [频率保护] 提交完毕，进入 ${Math.round(coolDown / 1000)} 秒深度冷却...`,
               );
-              await new Promise((res) => setTimeout(res, coolDown));
+              await sleepWithThrottle(coolDown);
               if (isCancelled) return; // 🌟 睡醒后立刻检查，如果是取消状态则直接退出函数
             }
           }
@@ -937,7 +970,7 @@ async function runAutoTask(sender, uiConfig) {
 
         // 🌟 剧集间隙：虽然现在是蓄水池模式，但每处理完一部剧的逻辑计算，
         // 我们依然可以稍微停顿一下，防止本地读取压力过大。
-        await new Promise((res) => setTimeout(res, 500));
+        await sleepWithThrottle(500);
         if (isCancelled) return;
         // 🌟 每部剧跑完校验一次授权，防止跑到一半卡密过期或点数不足
         const authDataResult = await checkAuth(
@@ -952,7 +985,7 @@ async function runAutoTask(sender, uiConfig) {
 
         const profileCoolDown = 1500 + Math.random() * 3000; 
         taskUiLog(`\n⏸️ [方案切换缓冲] 休息 ${Math.round(profileCoolDown / 1000)} 秒，准备载入下一个方案...`);
-        await new Promise((res) => setTimeout(res, profileCoolDown));
+        await sleepWithThrottle(profileCoolDown);
         if (isCancelled) return; // 🌟 方案切换睡眠后拦截
       }
     }
@@ -978,6 +1011,7 @@ async function runAutoTask(sender, uiConfig) {
     throw e;
   } finally {
     uiSender = null;
+    requestThrottleMultiplier = 1;
   }
 }
 
