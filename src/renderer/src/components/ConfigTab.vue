@@ -316,7 +316,7 @@
 
               <div v-else class="placeholder-info">
                 <el-icon class="upload-icon"><UploadFilled /></el-icon>
-                <div class="text">点击或拖拽 Excel（.xlsx / .xls）</div>
+                <div class="text">仅支持 Excel（.xlsx / .xls），点击或拖拽上传</div>
               </div>
             </div>
           </div>
@@ -757,7 +757,7 @@ const isExcelPath = (pathOrName) => {
 };
 const openFolder = (n) => window.api.openProfileFolder(n);
 const triggerFileSelect = async (k) => {
-  const s = await window.api.openFile();
+  const s = await window.api.openExcelFile();
   if (!s) return;
   if (!isExcelPath(s)) {
     ElMessage.warning("仅支持 Excel 文件（.xlsx / .xls）");

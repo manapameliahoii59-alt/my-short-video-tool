@@ -4,6 +4,8 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 const api = {
   // --- 基础文件操作 ---
   openFile: () => ipcRenderer.invoke("dialog:openFile"),
+  /** 仅 Excel（.xlsx / .xls），用于方案文件配置等 */
+  openExcelFile: () => ipcRenderer.invoke("dialog:openExcelFile"),
   openExternal: (path) => ipcRenderer.invoke("open-file-external", path),
 
   // 🌟 新增：物理导入文件到方案专属目录

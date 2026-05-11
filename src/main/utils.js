@@ -62,6 +62,7 @@ function smartSplit(str) {
 
 /** 根据主体/价格进行匹配逻辑 */
 function matchByInput(list, input) {
+  
   const major = parseInt(input);
   if (isNaN(major) || !Array.isArray(list)) return null;
 
@@ -152,8 +153,12 @@ function getMachineId() {
 //   }
 // }
 
+/** 验证服务器请求失败（超时、断网等）时最多尝试次数，含首次 */
+const CHECK_AUTH_NETWORK_MAX_ATTEMPTS = 3;
+
 /**
  * 权限验证 (对接全新计费网关 - 卡密+账号+密码绑定)
+ * 网络异常时会自动重试（共最多 CHECK_AUTH_NETWORK_MAX_ATTEMPTS 次），业务拒绝不重试。
  * @param {string} userKey 授权卡密
  * @param {string} workingAccount 用户在界面填写的业务主账号
  * @param {string} workingPassword 业务主账号的密码 🌟新增
@@ -179,38 +184,46 @@ async function checkAuth(userKey, workingAccount, workingPassword) {
     encryptedPassword = Buffer.from(String(workingPassword)).toString("base64");
   }
 
-  // 抓取当前电脑的硬件机器码
   const machineId = getMachineId();
-  try {
-    const response = await axios.post(
-      SERVER_URL,
-      {
-        license_key: userKey.trim(),
-        machine_id: machineId,
-        working_account: String(workingAccount).trim(),
-        working_password: encryptedPassword, // 🌟 发送加密后的密码
-      },
-      { timeout: 8000 },
-    );
+  const postBody = {
+    license_key: userKey.trim(),
+    machine_id: machineId,
+    working_account: String(workingAccount).trim(),
+    working_password: encryptedPassword,
+  };
 
-    const resData = response.data;
+  for (let attempt = 1; attempt <= CHECK_AUTH_NETWORK_MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = await axios.post(SERVER_URL, postBody, { timeout: 8000 });
 
-    if (resData.status === "ok") {
-      console.log(`\n🔑 授权验证通过: ${resData.msg}`);
-      return {
-        status: 1,
-        msg: resData.msg,
-        minTime: resData.min_time,
-        maxTime: resData.max_time,
-      };
-    } else {
+      const resData = response.data;
+
+      if (resData.status === "ok") {
+        console.log(`\n🔑 授权验证通过: ${resData.msg}`);
+        return {
+          status: 1,
+          msg: resData.msg,
+          minTime: resData.min_time,
+          maxTime: resData.max_time,
+        };
+      }
       console.log(`\n🚫 授权被拦截: ${resData.msg}`);
       return { status: -1, msg: resData.msg };
+    } catch (error) {
+      console.log(
+        `\n🌐 网络异常，无法连接到验证服务器。(第 ${attempt}/${CHECK_AUTH_NETWORK_MAX_ATTEMPTS} 次)`,
+      );
+      if (attempt < CHECK_AUTH_NETWORK_MAX_ATTEMPTS) {
+        const delayMs = 1000 * attempt;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+      console.log(`\n🌐 网络异常，已重试仍无法连接到验证服务器。`);
+      return { status: -1, msg: "无法连接验证服务器，请检查网络" };
     }
-  } catch (error) {
-    console.log(`\n🌐 网络异常，无法连接到验证服务器。`);
-    return { status: -1, msg: "无法连接验证服务器，请检查网络" };
   }
+
+  return { status: -1, msg: "无法连接验证服务器，请检查网络" };
 }
 
 /** 格式化打印数据解析结果 */
@@ -348,10 +361,21 @@ const readRowsFromJsonPayload = (filePath) => {
 
 const getNormalizedSidecarPath = (filePath) => `${filePath}.normalized.json`;
 
+/** 导入时会生成 .normalized.json；用户若之后直接改 xlsx/csv，侧车会过期，应读源文件 */
+function shouldReadFromSidecar(filePath, sidecarPath) {
+  if (!fs.existsSync(sidecarPath)) return false;
+  if (!fs.existsSync(filePath)) return true;
+  try {
+    return fs.statSync(filePath).mtimeMs <= fs.statSync(sidecarPath).mtimeMs;
+  } catch {
+    return true;
+  }
+}
+
 function readTabularRows(filePath) {
   try {
     const sidecarPath = getNormalizedSidecarPath(filePath);
-    if (fs.existsSync(sidecarPath)) {
+    if (shouldReadFromSidecar(filePath, sidecarPath)) {
       return readRowsFromJsonPayload(sidecarPath);
     }
 
@@ -372,7 +396,7 @@ function readTabularRows(filePath) {
 function readTabularHeaders(filePath) {
   try {
     const sidecarPath = getNormalizedSidecarPath(filePath);
-    if (fs.existsSync(sidecarPath)) {
+    if (shouldReadFromSidecar(filePath, sidecarPath)) {
       const content = fs.readFileSync(sidecarPath, "utf-8");
       const parsed = JSON.parse(content);
       if (Array.isArray(parsed?.headers)) {

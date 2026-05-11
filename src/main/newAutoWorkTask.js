@@ -211,6 +211,10 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
     dramaInfo.materialDateRange || CONFIG.FILES.dateRange;
   let searchProductName = testDramaName ? testDramaName : productName;
 
+const target_bid =
+  proConfigData.proConfig_bid ||
+  proConfigData.proConfig_subject;
+  
   try {
     // --- 1. 获取剧集信息 ---
     const dramaCacheKey = `${productName}_${CONFIG.FILES.BUSINESS_TYPE}_${copyrightData}`;
@@ -260,6 +264,7 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       },
     );
 
+
     if (isCancelled) return null; // 🌟 拦截点
     if (!productDataList || productDataList.length === 0) {
       throw new Error(`未找到剧集信息或版权不匹配: ${productName}`);
@@ -267,7 +272,8 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
 
     let productInfo;
     if (CONFIG.FILES.BUSINESS_TYPE === "端原生-付费短剧") {
-      productInfo = matchByInput(productDataList, proConfig_subjectId);
+      
+      productInfo = matchByInput(productDataList, target_bid);
     } else {
       productInfo = productDataList?.[0];
     }
@@ -318,6 +324,7 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       email: proConfigData.proConfig_email,
       copyright: proConfigData.proConfig_copyright,
       subject: proConfigData.proConfig_subject,
+      bid: proConfigData.proConfig_bid,
     });
     if (Array.isArray(accountIds) && accountIds.length == 0)
       throw new Error(`未获取到可用账号`);
@@ -417,18 +424,34 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
           fetchMaterials = rawList.filter((item) => item.videoUrl && item.poster);
 
           // 2. 精确过滤素材名称前缀
+          // fetchMaterials = fetchMaterials.filter((materItem) => {
+          //   const materialName = materItem.adPlatformMaterialName || "";
+            
+          //   // 仅考虑 -、—、_ 三种分隔符
+          //   const parts = materialName.split(/[-—_]/);
+          //   const namePrefix = parts[0].trim();
+            
+          //   // 确保 productName 也去掉了首尾空格，防止因录入问题导致的匹配失败
+          //   const targetName = productName.trim();
+
+          //   // 只有当前缀完全等于目标剧名时才保留
+          //   return namePrefix === targetName;
+          // });
+
           fetchMaterials = fetchMaterials.filter((materItem) => {
             const materialName = materItem.adPlatformMaterialName || "";
-            
-            // 仅考虑 -、—、_ 三种分隔符
-            const parts = materialName.split(/[-—_]/);
-            const namePrefix = parts[0].trim();
-            
-            // 确保 productName 也去掉了首尾空格，防止因录入问题导致的匹配失败
+          
+            // 按 -、—、_ 分割，并去掉每段首尾空格
+            const parts = materialName
+              .split(/[-—_]/)
+              .map(item => item.trim());
+              
+          
+            // 目标剧名去空格
             const targetName = productName.trim();
-
-            // 只有当前缀完全等于目标剧名时才保留
-            return namePrefix === targetName;
+          
+            // 只要任意一段匹配剧名即可
+            return parts.includes(targetName);
           });
 
           if (fetchMaterials.length > 0) {
@@ -921,7 +944,7 @@ async function runAutoTask(sender, uiConfig) {
         taskUiLog(
           `\n🎬 [${profile.name}] 处理剧集 ${j + 1}/${dramaCount}: ${dramaInfo.targetDramaName}`,
         );
-
+        
         // --- 模板循环 ---
         for (let i = 0; i < templateRowCount; i++) {
           if (isCancelled) return; // 🛑 拦截点 3
@@ -936,9 +959,12 @@ async function runAutoTask(sender, uiConfig) {
               row["推广链接模板ID"],
             ).trim(),
             proConfig_copyright: templateCopyright,
-            proConfig_strategyId: String(row["策略包ID"]).trim(),
-            proConfig_titlePackageId: String(row["标题组ID"]).trim(),
-            proConfig_subject: String(row["主体"]).trim(),
+            // proConfig_strategyId: String(row["策略包ID"]).trim(),
+            // proConfig_titlePackageId: String(row["标题组ID"]).trim(),
+            proConfig_strategyId: String(row["策略包ID"] || "").trim(),
+            proConfig_titlePackageId: String(row["标题组ID"] || "").trim(),
+            proConfig_subject: String(row["主体"] || "").trim(),
+            proConfig_bid: row["出价"] ? String(row["出价"]).trim() : "",
           };
 
           const taskData = await generatePublishPayload(

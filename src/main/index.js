@@ -645,6 +645,15 @@ app.whenReady().then(() => {
     return canceled ? null : filePaths[0];
   });
 
+  /** 方案配置等场景：文件选择器仅展示 Excel */
+  ipcMain.handle("dialog:openExcelFile", async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      properties: ["openFile"],
+      filters: [{ name: "Excel", extensions: ["xlsx", "xls"] }],
+    });
+    return canceled ? null : filePaths[0];
+  });
+
   ipcMain.handle("import-profile-file", async (event, { profileName, sourcePath }) => {
       try {
         if (!profileName) throw new Error("请先输入或选择方案名称");
