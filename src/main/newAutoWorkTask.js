@@ -145,26 +145,6 @@ const writeApiLog = (step, params, response) => {
 };
 
 
-let materialFileNameList = null;
-
-async function getMaterialFileName() {
-  let materialFileNameRaw = null;
-  materialFileNameRaw = await client.post("adv-asset-inside/folder/search", {
-    pageNo: 1,
-    pageSize: 150,
-    query: null,
-    projectId: null,
-    libraryType: "public",
-    showPrivateOnly: false,
-    queryPolicy: "ft",
-  });
-  materialFileNameList = materialFileNameRaw?.data?.data?.list;
-}
-
-function getTargetMaterialFileId(fileName) {
-  return findMaterialFolderByName(materialFileNameList, fileName);
-}
-
 /**
  * 全局缓存容器
  */
@@ -175,6 +155,7 @@ const GLOBAL_CACHE = {
   titlePackage: {},
   accountsList: null,
   materials: {}, // 🌟 新增：素材专属缓存池
+  materialFolders: {}, // 素材文件夹搜索（按 query 维度缓存）
 };
 
 async function getDataWithCache(type, key, fetchFn) {
@@ -191,6 +172,24 @@ async function getDataWithCache(type, key, fetchFn) {
     GLOBAL_CACHE[type][key] = data;
   }
   return data;
+}
+
+/** 按剧单「素材文件名称」作为 folder/search 的 query 拉取列表，同 query 走缓存 */
+async function getMaterialFolderListCached(materialFileNameQuery) {
+  const q = clearSpaces(materialFileNameQuery);
+  if (!q) return [];
+  return getDataWithCache("materialFolders", q, async () => {
+    const res = await client.post("adv-asset-inside/folder/search", {
+      pageNo: 1,
+      pageSize: 150,
+      query: q,
+      projectId: null,
+      libraryType: "public",
+      showPrivateOnly: false,
+      queryPolicy: "ft",
+    });
+    return res?.data?.data?.list || [];
+  });
 }
 
 /**
@@ -223,6 +222,7 @@ const target_bid =
       dramaCacheKey,
       async () => {
         let resbookParmas = {
+          bookName: productName,
           key: productName,
           pageNo: 1,
           linkType:
@@ -367,7 +367,8 @@ const target_bid =
     // --- 4. 🌟 核心优化：获取素材并加入缓存池 ---
     let tarMaterItem;
     if (materialFileNameData) {
-      tarMaterItem = getTargetMaterialFileId(materialFileNameData);
+      const folderList = await getMaterialFolderListCached(materialFileNameData);
+      tarMaterItem = findMaterialFolderByName(folderList, materialFileNameData);
     }
 
     let rankingListOrLibrarySign = "";
@@ -889,8 +890,6 @@ async function runAutoTask(sender, uiConfig) {
       `🚀 任务启动：共选中 ${CONFIG.SELECTED_PROFILES.length} 个方案，总剧集 ${dramaCount} 部`,
     );
     taskUiLog(`===========================================================`);
-
-    await getMaterialFileName();
 
     isCancelled = false; // 每次启动任务前，重置开关
     let globalTaskPool = []; // 🌟 核心：蓄水池
