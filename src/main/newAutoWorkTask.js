@@ -566,14 +566,15 @@ const target_bid =
       promotionStrategyName: strategy.name,
       bidType: strategy.bidType,
       landingType: strategy.landingType,
-      strategyType: 1,
+      strategyType: 3,//3为项目内平铺 2为账户内平铺
       titleNum: 10,
       titlePackageIds: `[${titlePackage.id}]`,
       titleTextList: "[]",
       folderIdPaths: "[]",
       commentMaterialList: "[]",
       projectNum: pro_num,
-      advertNum: ads_num,
+      advertNum: 0,//当为项目内平铺时，这个为0
+      // advertNum: ads_num,
       note: "",
       actionTrackUrl: "",
       projectName: "",
@@ -594,14 +595,16 @@ const target_bid =
       advertiserNames: JSON.stringify(accountListName),
       publishName: finalPublishName,
       accountList: JSON.stringify(accListData),
+      deliveryStrategyType:false,
+      folderIdPaths:'[]'
     };
     
 
-    if (CONFIG.FILES.isAccountFlat) {
-      payload1.strategyType = 2;
-      payload1.advertNum = 0;
-      payload1.projectNum = 0;
-    }
+    // if (CONFIG.FILES.isAccountFlat) {
+    //   payload1.strategyType = 2;
+    //   payload1.advertNum = 0;
+    //   payload1.projectNum = 0;
+    // }
 
     return {
       payload1,
