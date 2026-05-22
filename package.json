@@ -1,6 +1,6 @@
 {
   "name": "comedyapplication",
-  "version": "1.0.17",
+  "version": "1.0.20",
   "description": "An Electron application with Vue",
   "main": "./out/main/index.js",
   "author": "example.com",
