@@ -374,11 +374,13 @@ const target_bid =
     let rankingListOrLibrarySign = "";
     let isSpecify = Array.isArray(specifyMaterialsArr) && specifyMaterialsArr.length > 0;
     let rangeDataObj = getDateRangeByType(materialDateRangeData);
+    const isCompanyRanking = (CONFIG.SETTINGS.RANKING_TYPE || "material") === "company";
 
     // 拼装精准的素材缓存 Key
     const specifyKeyStr = isSpecify ? specifyMaterialsArr.join('-') : 'none';
     const folderIdStr = tarMaterItem?.id || 'nofolder';
-    const materialCacheKey = `mat_${searchProductName}_${rangeDataObj.startDay}_${rangeDataObj.endDay}_${specifyKeyStr}_${folderIdStr}_${copyrightData}`;
+    const rankingTypeStr = isCompanyRanking ? "company" : "material";
+    const materialCacheKey = `mat_${rankingTypeStr}_${searchProductName}_${rangeDataObj.startDay}_${rangeDataObj.endDay}_${specifyKeyStr}_${folderIdStr}_${copyrightData}`;
     
     taskUiLog(`   🔍 准备获取素材 (Key: ${searchProductName})...`);
     // 使用 getDataWithCache 包裹整个搜索逻辑
@@ -408,17 +410,30 @@ const target_bid =
           fetchMaterials = rawMaterials.filter((item) => item.url && item.coverUrl);
 
         } else if (!testDramaName) {
-          resAsset = await client.post(
-            "/adv-report-query/materialDay/getLatestCostByDayRangeV2",
-            {
-              materialInfo: searchProductName,
-              startDay: rangeDataObj.startDay,
-              endDay: rangeDataObj.endDay,
-              sortingFields: [{ field: "statCost", order: "desc" }],
-              pageNo: 1,
-              pageSize: pageSize,
-            },
-          );
+          if (isCompanyRanking) {
+            
+            resAsset = await client.post(
+              "/adv-report-query/materialDay/getTenantCumSumBefore",
+              {
+                materialInfo: searchProductName,
+                sortingFields: [{ field: "statCost", order: "desc" }],
+                pageNo: 1,
+                pageSize: pageSize,
+              },
+            );
+          } else {
+            resAsset = await client.post(
+              "/adv-report-query/materialDay/getLatestCostByDayRangeV2",
+              {
+                materialInfo: searchProductName,
+                startDay: rangeDataObj.startDay,
+                endDay: rangeDataObj.endDay,
+                sortingFields: [{ field: "statCost", order: "desc" }],
+                pageNo: 1,
+                pageSize: pageSize,
+              },
+            );
+          }
 
           let rawList = resAsset.data?.data?.list || [];
           // 1. 基础过滤：必须有视频和封面
@@ -492,6 +507,8 @@ const target_bid =
     // 恢复打印状态标识
     if (isSpecify || testDramaName) {
       rankingListOrLibrarySign = "素材库";
+    } else if (isCompanyRanking) {
+      rankingListOrLibrarySign = "公司榜单";
     } else {
       rankingListOrLibrarySign = "素材榜单";
     }
@@ -510,7 +527,7 @@ const target_bid =
     const finalPublishName = `${productInfo.bookName}_${ydData}`;
 
     let materialInfoData = null;
-    if (rankingListOrLibrarySign === "素材榜单") {
+    if (rankingListOrLibrarySign !== "素材库") {
       materialInfoData = JSON.stringify(
         materials.map((item) => ({
           id: `${item.materialId}-${item.platform}`,

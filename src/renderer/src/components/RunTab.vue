@@ -171,6 +171,13 @@
     </div>
 
     <div class="detail-panel">
+      <div class="form-row ranking-row">
+        <span class="label-text">榜单选择：</span>
+        <el-radio-group v-model="form.rankingType">
+          <el-radio value="material" size="large">素材榜单</el-radio>
+          <el-radio value="company" size="large">公司榜单</el-radio>
+        </el-radio-group>
+      </div>
       <div class="form-row action-row">
         <span class="label-text">运行动作：</span>
         <el-radio-group v-model="form.action">
@@ -281,7 +288,7 @@ const selectedProfiles = ref([]);
 const logRef = ref(null);
 const isDragging = ref(false);
 
-const form = reactive({ action: "publishBeta" });
+const form = reactive({ action: "publishBeta", rankingType: "material" });
 
 const selectedProfileSetId = ref("");
 const applyingProfileSet = ref(false);
@@ -502,6 +509,7 @@ const start = () => {
     selectedProfiles: selectedProfiles.value,
     globalDramaList: props.globalDramaList,
     action: form.action,
+    rankingType: form.rankingType,
   });
 };
 
@@ -542,7 +550,7 @@ watch(() => props.logs, () => {
 
 .card-header-actions {
   background: #fff;
-  padding: 12px 15px;
+  padding: 8px 15px;
   border-radius: 8px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
   margin-bottom: 12px;
@@ -599,7 +607,7 @@ watch(() => props.logs, () => {
 
 .detail-panel {
   background: #fff;
-  padding: 10px 20px;
+  padding: 8px 20px;
   border-radius: 8px;
   border: 1px solid #ebeef5;
   flex-shrink: 0;
@@ -607,6 +615,7 @@ watch(() => props.logs, () => {
 }
 
 .form-row { display: flex; align-items: center; font-size: 14px; }
+.ranking-row { margin-bottom: 8px; }
 .label-text { width: 100px; color: #606266; font-weight: bold; }
 .path-link-wrapper { flex: 1; overflow: hidden; margin-right: 10px; }
 

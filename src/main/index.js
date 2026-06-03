@@ -815,6 +815,7 @@ app.whenReady().then(() => {
     RUNTIME_CONFIG.FILES.isAccountFlat = uiConfig.isAccountFlat ?? false;
     RUNTIME_CONFIG.FILES.dateRange = uiConfig.dateRange || "";
     RUNTIME_CONFIG.SETTINGS.ACTION = uiConfig.action;
+    RUNTIME_CONFIG.SETTINGS.RANKING_TYPE = uiConfig.rankingType || "material";
 
     if (!RUNTIME_CONFIG.SETTINGS) RUNTIME_CONFIG.SETTINGS = {};
     RUNTIME_CONFIG.SETTINGS.ACCOUNT_MATCH_COUNT = uiConfig.accountMatchCount ?? 2;
