@@ -192,6 +192,29 @@ async function getMaterialFolderListCached(materialFileNameQuery) {
   });
 }
 
+/** 榜单结果本地匹配：支持剧名单段、完整素材名、多段组合 */
+function materialNameMatchesSearch(adPlatformMaterialName, searchName) {
+  const materialName = (adPlatformMaterialName || "").trim();
+  const targetName = (searchName || "").trim();
+  if (!targetName) return true;
+  if (materialName === targetName) return true;
+
+  const materialParts = materialName
+    .split(/[-—_]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (materialParts.includes(targetName)) return true;
+
+  const searchParts = targetName
+    .split(/[-—_]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (searchParts.length > 1) {
+    return searchParts.every((part) => materialParts.includes(part));
+  }
+  return false;
+}
+
 /**
  * 3. 数据组装函数
  */
@@ -365,53 +388,71 @@ const target_bid =
     if (isCancelled) return null;
 
     // --- 4. 🌟 核心优化：获取素材并加入缓存池 ---
+    const rankingType = CONFIG.SETTINGS.RANKING_TYPE || "material";
+    const isLibraryMode = rankingType === "library";
+    const isCompanyRanking = rankingType === "company";
+    let isSpecify = Array.isArray(specifyMaterialsArr) && specifyMaterialsArr.length > 0;
+    let rangeDataObj = getDateRangeByType(materialDateRangeData);
+
+    // 仅素材库模式才解析文件夹，用于限定搜索范围
     let tarMaterItem;
-    if (materialFileNameData) {
+    if (isLibraryMode && materialFileNameData) {
       const folderList = await getMaterialFolderListCached(materialFileNameData);
       tarMaterItem = findMaterialFolderByName(folderList, materialFileNameData);
     }
 
     let rankingListOrLibrarySign = "";
-    let isSpecify = Array.isArray(specifyMaterialsArr) && specifyMaterialsArr.length > 0;
-    let rangeDataObj = getDateRangeByType(materialDateRangeData);
-    const isCompanyRanking = (CONFIG.SETTINGS.RANKING_TYPE || "material") === "company";
+    const specifyKeyStr = isSpecify ? specifyMaterialsArr.join("-") : "none";
+    const folderIdStr = isLibraryMode ? tarMaterItem?.id || "nofolder" : "nofolder";
+    const materialCacheKey = `mat_${rankingType}_${searchProductName}_${rangeDataObj.startDay}_${rangeDataObj.endDay}_${specifyKeyStr}_${folderIdStr}_${copyrightData}`;
 
-    // 拼装精准的素材缓存 Key
-    const specifyKeyStr = isSpecify ? specifyMaterialsArr.join('-') : 'none';
-    const folderIdStr = tarMaterItem?.id || 'nofolder';
-    const rankingTypeStr = isCompanyRanking ? "company" : "material";
-    const materialCacheKey = `mat_${rankingTypeStr}_${searchProductName}_${rangeDataObj.startDay}_${rangeDataObj.endDay}_${specifyKeyStr}_${folderIdStr}_${copyrightData}`;
-    
     taskUiLog(`   🔍 准备获取素材 (Key: ${searchProductName})...`);
-    // 使用 getDataWithCache 包裹整个搜索逻辑
     let materials = await getDataWithCache(
       "materials",
       materialCacheKey,
       async () => {
         let fetchMaterials = [];
         let resAsset;
-        if (isSpecify) {
-          
-          let _materialPar = {
-            queryPolicy: "em",
-            query: "",
-            showPrivateOnly: false,
-            sortingFields: [{ field: "updateTime", order: "desc" }],
-            includeFolder: false,
-            fullNames: specifyMaterialsArr,
-            libraryType: "public",
-            pageNo: 1,
-            pageSize: 20,
-          };
-          if (tarMaterItem?.id) _materialPar.folderId = tarMaterItem?.id;
 
-          resAsset = await client.post("/adv-asset-inside/search", _materialPar);
-          const rawMaterials = resAsset.data?.data?.materials || [];
-          fetchMaterials = rawMaterials.filter((item) => item.url && item.coverUrl);
+        if (isLibraryMode) {
+          // 素材库：指定素材全名搜索 / 剧名模糊搜索，可限定文件夹
+          if (isSpecify) {
+            let _materialPar = {
+              queryPolicy: "em",
+              query: "",
+              showPrivateOnly: false,
+              sortingFields: [{ field: "updateTime", order: "desc" }],
+              includeFolder: false,
+              fullNames: specifyMaterialsArr,
+              libraryType: "public",
+              pageNo: 1,
+              pageSize: 20,
+            };
+            if (tarMaterItem?.id) _materialPar.folderId = tarMaterItem.id;
 
-        } else if (!testDramaName) {
+            resAsset = await client.post("/adv-asset-inside/search", _materialPar);
+            const rawMaterials = resAsset.data?.data?.materials || [];
+            fetchMaterials = rawMaterials.filter((item) => item.url && item.coverUrl);
+          } else {
+            let _Materialpar2 = {
+              queryPolicy: "em",
+              query: searchProductName,
+              showPrivateOnly: false,
+              partOfFullName: true,
+              libraryType: "public",
+              pageNo: 1,
+              pageSize: pageSize,
+              sortingFields: [{ field: "updateTime", order: "desc" }],
+            };
+            if (tarMaterItem?.id) _Materialpar2.folderId = tarMaterItem.id;
+
+            resAsset = await client.post("/adv-asset-inside/search", _Materialpar2);
+            const rawMaterials = resAsset.data?.data?.materials || [];
+            fetchMaterials = rawMaterials.filter((item) => item.url && item.coverUrl);
+          }
+        } else {
+          // 素材榜单 / 公司榜单：不受文件夹限定，支持指定素材与测试剧名
           if (isCompanyRanking) {
-            
             resAsset = await client.post(
               "/adv-report-query/materialDay/getTenantCumSumBefore",
               {
@@ -436,39 +477,21 @@ const target_bid =
           }
 
           let rawList = resAsset.data?.data?.list || [];
-          // 1. 基础过滤：必须有视频和封面
           fetchMaterials = rawList.filter((item) => item.videoUrl && item.poster);
 
-          // 2. 精确过滤素材名称前缀
-          // fetchMaterials = fetchMaterials.filter((materItem) => {
-          //   const materialName = materItem.adPlatformMaterialName || "";
-            
-          //   // 仅考虑 -、—、_ 三种分隔符
-          //   const parts = materialName.split(/[-—_]/);
-          //   const namePrefix = parts[0].trim();
-            
-          //   // 确保 productName 也去掉了首尾空格，防止因录入问题导致的匹配失败
-          //   const targetName = productName.trim();
+          fetchMaterials = fetchMaterials.filter((materItem) =>
+            materialNameMatchesSearch(
+              materItem.adPlatformMaterialName,
+              searchProductName,
+            ),
+          );
 
-          //   // 只有当前缀完全等于目标剧名时才保留
-          //   return namePrefix === targetName;
-          // });
-
-          fetchMaterials = fetchMaterials.filter((materItem) => {
-            const materialName = materItem.adPlatformMaterialName || "";
-          
-            // 按 -、—、_ 分割，并去掉每段首尾空格
-            const parts = materialName
-              .split(/[-—_]/)
-              .map(item => item.trim());
-              
-          
-            // 目标剧名去空格
-            const targetName = productName.trim();
-          
-            // 只要任意一段匹配剧名即可
-            return parts.includes(targetName);
-          });
+          if (isSpecify) {
+            const specifySet = new Set(specifyMaterialsArr.map((name) => name.trim()));
+            fetchMaterials = fetchMaterials.filter((item) =>
+              specifySet.has((item.adPlatformMaterialName || "").trim()),
+            );
+          }
 
           if (fetchMaterials.length > 0) {
             let materialscheckArr = fetchMaterials.map((item) => item.materialId);
@@ -481,31 +504,14 @@ const target_bid =
               mappingId: mappingTable[ele.materialId] || null,
             }));
           }
-        } else {
-          let _Materialpar2 = {
-            queryPolicy: "em",
-            query: searchProductName,
-            showPrivateOnly: false,
-            partOfFullName: true,
-            libraryType: "public",
-            pageNo: 1,
-            pageSize: pageSize,
-            sortingFields: [{ field: "updateTime", order: "desc" }],
-          };
-          if (tarMaterItem?.id) _Materialpar2.folderId = tarMaterItem?.id;
-
-          resAsset = await client.post("/adv-asset-inside/search", _Materialpar2);
-          const rawMaterials = resAsset.data?.data?.materials || [];
-          fetchMaterials = rawMaterials.filter((item) => item.url && item.coverUrl);
         }
 
-        return fetchMaterials; // 将查到的结果返回给缓存系统
-      }
+        return fetchMaterials;
+      },
     );
-    if (isCancelled) return null; // 🌟 获取素材回来后再次检查拦截
+    if (isCancelled) return null;
 
-    // 恢复打印状态标识
-    if (isSpecify || testDramaName) {
+    if (isLibraryMode) {
       rankingListOrLibrarySign = "素材库";
     } else if (isCompanyRanking) {
       rankingListOrLibrarySign = "公司榜单";

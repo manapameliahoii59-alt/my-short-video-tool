@@ -176,6 +176,7 @@
         <el-radio-group v-model="form.rankingType">
           <el-radio value="material" size="large">素材榜单</el-radio>
           <el-radio value="company" size="large">公司榜单</el-radio>
+          <el-radio value="library" size="large">素材库</el-radio>
         </el-radio-group>
       </div>
       <div class="form-row action-row">
