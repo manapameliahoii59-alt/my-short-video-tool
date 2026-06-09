@@ -194,7 +194,9 @@ async function getMaterialFolderListCached(materialFileNameQuery) {
 
 /** 榜单结果本地匹配：支持剧名单段、完整素材名、多段组合 */
 function materialNameMatchesSearch(adPlatformMaterialName, searchName) {
-  const materialName = (adPlatformMaterialName || "").trim();
+  const materialName = (adPlatformMaterialName || "")
+    .replace(/[\x00-\x1f\x7f\xa0]/g, "")
+    .trim();
   const targetName = (searchName || "").trim();
   if (!targetName) return true;
   if (materialName === targetName) return true;
@@ -485,12 +487,18 @@ const target_bid =
               searchProductName,
             ),
           );
-
           if (isSpecify) {
-            const specifySet = new Set(specifyMaterialsArr.map((name) => name.trim()));
-            fetchMaterials = fetchMaterials.filter((item) =>
-              specifySet.has((item.adPlatformMaterialName || "").trim()),
+            const specifySet = new Set(
+              specifyMaterialsArr.map((name) =>
+                name.replace(/[\x00-\x1f\x7f\xa0]/g, "").trim()
+              )
             );
+            fetchMaterials = fetchMaterials.filter((item) => {
+              const name = (item.adPlatformMaterialName || "")
+                .replace(/[\x00-\x1f\x7f\xa0]/g, "")
+                .trim();
+              return specifySet.has(name);
+            });
           }
 
           if (fetchMaterials.length > 0) {
