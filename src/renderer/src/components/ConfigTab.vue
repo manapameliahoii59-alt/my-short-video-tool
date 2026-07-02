@@ -13,12 +13,12 @@
           />
           <el-button
             type="success"
-            :icon="Plus"
+            :icon="ChromeFilled"
             circle
             size="small"
             style="margin-left: 8px; flex-shrink: 0;"
-            title="新建方案"
-            @click="initNewProfile"
+            title="清除账号"
+            @click="clearAccount"
           />
           <el-button
             type="warning"
@@ -134,16 +134,16 @@
           <el-button
             style="flex: 1; display: flex; justify-content: center; align-items: center;"
             size="small"
-            :type="hasUnsyncedChanges ? 'warning' : 'default'"
-            :plain="!hasUnsyncedChanges"
-            :class="{ 'needs-backup-pulse': hasUnsyncedChanges && !isCloudUploading }"
+            :type="needsCloudBackup ? 'warning' : 'default'"
+            :plain="!needsCloudBackup"
+            :class="{ 'needs-backup-pulse': needsCloudBackup && !isCloudUploading }"
             :disabled="isCloudUploading || isCloudDownloading"
             @click="handleCloudUpload"
           >
             <el-icon v-if="isCloudUploading" class="is-loading" style="margin-right: 4px;"><Loading /></el-icon>
             <span v-else style="margin-right: 4px;">☁️</span>
             <span v-if="isCloudUploading">备份中...</span>
-            <span v-else>{{ hasUnsyncedChanges ? "点我备份" : "云端备份" }}</span>
+            <span v-else>{{ needsCloudBackup ? "点我备份" : "云端备份" }}</span>
           </el-button>
           
           <el-button
@@ -162,6 +162,17 @@
     </div>
 
     <div class="main-content">
+      <div style="display: flex;margin-top: 19px;">
+        <el-button
+            type="success"
+            :icon="Plus"
+            circle
+            size="small"
+            style="margin-left: 8px; flex-shrink: 0;"
+            title="新建方案"
+            @click="initNewProfile"
+          />
+      </div>
       <el-card class="detail-card" shadow="never">
         <template #header>
           <div class="header-toolbar">
@@ -391,6 +402,61 @@
       </template>
     </el-dialog>
 
+    <el-dialog
+      v-model="showClearAccountDialog"
+      title="批量清除账号"
+      width="520px"
+      destroy-on-close
+      :close-on-click-modal="!isClearingAccounts"
+      :close-on-press-escape="!isClearingAccounts"
+      :show-close="!isClearingAccounts"
+    >
+      <div ref="clearAccountDialogBodyRef" class="clear-account-dialog-body">
+        <div style="margin-bottom: 12px; font-size: 14px; color: #606266; line-height: 1.6;">
+          每行输入一个账号，将在<strong>所有方案</strong>的账号列表 Excel 中查找并删除对应行（按「账号」列精确匹配）。
+        </div>
+        <el-input
+          v-model="clearAccountInput"
+          class="clear-account-textarea"
+          type="textarea"
+          :rows="12"
+          placeholder="账号1&#10;账号2&#10;账号3"
+        />
+      </div>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button :disabled="isClearingAccounts" @click="showClearAccountDialog = false">取消</el-button>
+          <el-button type="danger" :disabled="isClearingAccounts" @click="confirmClearAccounts">
+            开始清除
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showClearAccountResultDialog" title="清除完成" width="520px" destroy-on-close>
+      <div class="clear-result-summary">
+        共 <b>{{ clearAccountResultSummary.hitCount }}</b> 个方案、合计删除
+        <b>{{ clearAccountResultSummary.totalDeleted }}</b> 条
+      </div>
+      <el-scrollbar max-height="50vh">
+        <div class="clear-result-list">
+          <div
+            v-for="item in clearAccountResultList"
+            :key="item.profileName"
+            class="clear-result-item"
+          >
+            【{{ item.group }} / {{ item.profileName }}】删除 {{ item.deletedCount }} 条
+          </div>
+        </div>
+      </el-scrollbar>
+      <div class="clear-result-backup-tip">
+        账号数据已变更，请尽快点击左下角「点我备份」同步到云端，避免恢复时数据回退。
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="showClearAccountResultDialog = false">知道了</el-button>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
@@ -414,7 +480,8 @@ import {
   Folder,
   FolderAdd,
   CaretBottom,
-  Operation
+  Operation,
+  ChromeFilled
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox, ElLoading } from "element-plus";
 defineOptions({
@@ -458,6 +525,7 @@ const lastSavedGroup = ref(globalLastSavedGroup);
 
 // 快照响应式引用
 const cloudSnapshot = ref(globalPersistentSnapshot);
+const localFilesDirty = ref(false);
 
 /**
  * 状态快照生成（用于比对是否需要备份）
@@ -484,6 +552,8 @@ const hasUnsyncedChanges = computed(() => {
   const current = getSnapshotString(props.allProfiles, manualEmptyGroups.value);
   return current !== cloudSnapshot.value;
 });
+
+const needsCloudBackup = computed(() => hasUnsyncedChanges.value || localFilesDirty.value);
 
 // 初始化快照
 onMounted(() => {
@@ -537,6 +607,7 @@ const handleCloudUpload = async () => {
       const newSnapshot = getSnapshotString(props.allProfiles, manualEmptyGroups.value);
       cloudSnapshot.value = newSnapshot;
       globalPersistentSnapshot = newSnapshot;
+      localFilesDirty.value = false;
     } else { ElMessage.error(res.msg); }
   } catch (error) { ElMessage.error("同步失败"); } finally { isCloudUploading.value = false; loading.close(); }
 };
@@ -558,6 +629,7 @@ const handleCloudDownload = async () => {
         nextTick(() => {
           const s = getSnapshotString(res.data, manualEmptyGroups.value);
           cloudSnapshot.value = s; globalPersistentSnapshot = s;
+          localFilesDirty.value = false;
         });
       } else { ElMessage.error(res.msg); }
     } catch (e) { ElMessage.error("恢复失败"); } finally { isCloudDownloading.value = false; loading.close(); }
@@ -626,6 +698,83 @@ const createNewGroup = () => {
       manualEmptyGroups.value.add(g);
       ElMessage.success(`分组 [${g}] 已创建`);
     }).catch(() => {});
+};
+
+const showClearAccountDialog = ref(false);
+const showClearAccountResultDialog = ref(false);
+const clearAccountInput = ref("");
+const clearAccountDialogBodyRef = ref(null);
+const clearAccountResultList = ref([]);
+const clearAccountResultSummary = ref({ hitCount: 0, totalDeleted: 0 });
+const isClearingAccounts = ref(false);
+
+const clearAccount = () => {
+  clearAccountInput.value = "";
+  showClearAccountDialog.value = true;
+};
+
+const confirmClearAccounts = async () => {
+  const accounts = clearAccountInput.value
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (!accounts.length) {
+    return ElMessage.warning("请输入至少一个账号");
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `即将在全部方案的账号列表中删除 ${accounts.length} 个账号，此操作不可恢复，是否继续？`,
+      "确认清除",
+      { type: "warning", confirmButtonText: "确认", cancelButtonText: "取消" },
+    );
+  } catch {
+    return;
+  }
+
+  isClearingAccounts.value = true;
+  await nextTick();
+  const loading = ElLoading.service({
+    target: clearAccountDialogBodyRef.value || undefined,
+    text: "正在遍历所有方案并删除账号，请稍候...",
+    lock: true,
+  });
+  try {
+    const res = await window.api.batchRemoveAccountsFromProfiles({ accounts });
+    if (!res?.success) throw new Error(res?.msg || "清除失败");
+
+    const hit = (res.results || []).filter((r) => r.deletedCount > 0);
+    if (!hit.length) {
+      ElMessage.info("所有方案中均未找到目标账号");
+    } else {
+      const getProfileGroup = (name) => props.allProfiles[name]?.group || "默认分组";
+      hit.sort((a, b) => {
+        const ga = getProfileGroup(a.profileName);
+        const gb = getProfileGroup(b.profileName);
+        return ga.localeCompare(gb, "zh-CN") || a.profileName.localeCompare(b.profileName, "zh-CN");
+      });
+      clearAccountResultList.value = hit.map((r) => ({
+        group: getProfileGroup(r.profileName),
+        profileName: r.profileName,
+        deletedCount: r.deletedCount,
+      }));
+      clearAccountResultSummary.value = {
+        hitCount: hit.length,
+        totalDeleted: hit.reduce((sum, r) => sum + r.deletedCount, 0),
+      };
+      localFilesDirty.value = true;
+      showClearAccountDialog.value = false;
+      showClearAccountResultDialog.value = true;
+      return;
+    }
+    showClearAccountDialog.value = false;
+  } catch (e) {
+    ElMessage.error(e.message || "清除失败");
+  } finally {
+    isClearingAccounts.value = false;
+    loading.close();
+  }
 };
 
 const openDeleteGroupDialog = (groupName) => { groupToDelete.value = groupName; deleteGroupOption.value = "keep"; showDeleteGroupDialog.value = true; };
@@ -1286,5 +1435,48 @@ const openExternal = (p) => {
   100% {
     box-shadow: 0 0 0 0 rgba(230, 162, 60, 0);
   }
+}
+
+.clear-account-dialog-body {
+  min-height: 280px;
+}
+
+.clear-account-textarea :deep(.el-textarea__inner) {
+  color: #303133;
+  caret-color: #303133;
+}
+
+.clear-result-summary {
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: #606266;
+  line-height: 1.6;
+}
+
+.clear-result-list {
+  padding-right: 8px;
+}
+
+.clear-result-item {
+  padding: 6px 0;
+  font-size: 13px;
+  color: #303133;
+  line-height: 1.5;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.clear-result-item:last-child {
+  border-bottom: none;
+}
+
+.clear-result-backup-tip {
+  margin-top: 14px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #e6a23c;
+  background: #fdf6ec;
+  border: 1px solid #faecd8;
+  border-radius: 6px;
 }
 </style>

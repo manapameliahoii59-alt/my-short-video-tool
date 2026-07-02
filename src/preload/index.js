@@ -38,6 +38,8 @@ const api = {
     ipcRenderer.invoke("delete-profile-folder", profileName),
   renameProfileFolder: (payload) =>
     ipcRenderer.invoke("rename-profile-folder", payload),
+  batchRemoveAccountsFromProfiles: (payload) =>
+    ipcRenderer.invoke("batch-remove-accounts-from-profiles", payload),
 
   // --- 云端同步 ---
   cloudSave: (data) => ipcRenderer.invoke("cloud:save-profiles", data),

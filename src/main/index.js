@@ -8,7 +8,7 @@ import FormData from "form-data";
 import { runAutoTask, stopAutoTask } from "./newAutoWorkTask";
 import xlsx from "xlsx"; 
 import { autoUpdater } from "electron-updater";
-import { getDateRangeByType,getTodayString,sleep,logData,ensureAuth } from './utils';
+import { getDateRangeByType,getTodayString,sleep,logData,ensureAuth,clearAccountsCache } from './utils';
 import DEFAULT_CONFIG from "./config";
 
 const getAppRootDir = () => {
@@ -652,6 +652,60 @@ app.whenReady().then(() => {
       filters: [{ name: "Excel", extensions: ["xlsx", "xls"] }],
     });
     return canceled ? null : filePaths[0];
+  });
+
+  ipcMain.handle("batch-remove-accounts-from-profiles", async (_event, { accounts }) => {
+    try {
+      const targetSet = new Set(
+        (accounts || []).map((a) => String(a).trim()).filter(Boolean),
+      );
+      if (!targetSet.size) return { success: false, msg: "账号列表为空" };
+
+      const results = [];
+      for (const [profileName, pData] of Object.entries(userData.profiles || {})) {
+        const accountsFile = pData?.files?.ACCOUNTS;
+        if (!accountsFile) {
+          results.push({ profileName, deletedCount: 0, skipped: "未配置账号列表" });
+          continue;
+        }
+
+        const filePath = join(PROFILES_DIR, profileName, accountsFile);
+        if (!fs.existsSync(filePath)) {
+          results.push({ profileName, deletedCount: 0, skipped: "文件不存在" });
+          continue;
+        }
+
+        const workbook = xlsx.readFile(filePath);
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const headerRow = xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || [];
+        const headers = headerRow.map((v) => String(v).trim());
+        const rows = xlsx.utils.sheet_to_json(sheet, { defval: "", raw: false });
+
+        const before = rows.length;
+        const kept = rows.filter(
+          (row) => !targetSet.has(String(row["账号"] || "").trim()),
+        );
+        const deletedCount = before - kept.length;
+
+        if (deletedCount > 0) {
+          const newSheet = xlsx.utils.json_to_sheet(
+            kept,
+            headers.length ? { header: headers } : undefined,
+          );
+          workbook.Sheets[sheetName] = newSheet;
+          xlsx.writeFile(workbook, filePath);
+          tryCreateNormalizedTableSidecar(filePath);
+        }
+
+        results.push({ profileName, deletedCount });
+      }
+
+      clearAccountsCache();
+      return { success: true, results };
+    } catch (error) {
+      return { success: false, msg: error.message };
+    }
   });
 
   ipcMain.handle("import-profile-file", async (event, { profileName, sourcePath }) => {
