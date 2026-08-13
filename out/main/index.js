@@ -6,11 +6,11 @@ const fs$1 = require("node:fs");
 const axios = require("axios");
 const AdmZip = require("adm-zip");
 const FormData = require("form-data");
-const xlsx = require("xlsx");
 const fs = require("fs");
 const path = require("path");
 const util = require("util");
 const crypto = require("crypto");
+const xlsx = require("xlsx");
 const os = require("os");
 const child_process = require("child_process");
 const electronUpdater = require("electron-updater");
@@ -21,6 +21,10 @@ const randomSleep = (min, max, getCancelStatus) => {
   const start = Date.now();
   return new Promise((resolve) => {
     const timer = setInterval(() => {
+      if (getCancelStatus && getCancelStatus()) {
+        clearInterval(timer);
+        resolve(true);
+      }
       if (Date.now() - start >= ms) {
         clearInterval(timer);
         resolve(false);
@@ -33,7 +37,7 @@ function clearSpaces(str) {
 }
 function smartSplit(str) {
   if (!str) return [];
-  return String(str).split(/[\n,，]+/).map((item) => item.trim()).filter((item) => item.length > 0);
+  return String(str).split(/[\n、]+/).map((item) => item.trim()).filter((item) => item.length > 0);
 }
 function matchByInput(list, input) {
   const major = parseInt(input);
@@ -61,6 +65,7 @@ function getMachineId() {
   const rawId = `${cpuModel}_${hostname}_${mem}`;
   return crypto.createHash("md5").update(rawId).digest("hex");
 }
+const CHECK_AUTH_NETWORK_MAX_ATTEMPTS = 3;
 async function checkAuth(userKey, workingAccount, workingPassword) {
   const SERVER_URL = "http://129.204.86.63:3535/api/verify";
   if (!userKey || userKey.trim() === "") {
@@ -76,38 +81,45 @@ async function checkAuth(userKey, workingAccount, workingPassword) {
     encryptedPassword = Buffer.from(String(workingPassword)).toString("base64");
   }
   const machineId = getMachineId();
-  try {
-    const response = await axios.post(
-      SERVER_URL,
-      {
-        license_key: userKey.trim(),
-        machine_id: machineId,
-        working_account: String(workingAccount).trim(),
-        working_password: encryptedPassword
-        // 🌟 发送加密后的密码
-      },
-      { timeout: 8e3 }
-    );
-    const resData = response.data;
-    if (resData.status === "ok") {
-      console.log(`
+  const postBody = {
+    license_key: userKey.trim(),
+    machine_id: machineId,
+    working_account: String(workingAccount).trim(),
+    working_password: encryptedPassword
+  };
+  for (let attempt = 1; attempt <= CHECK_AUTH_NETWORK_MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = await axios.post(SERVER_URL, postBody, { timeout: 8e3 });
+      const resData = response.data;
+      if (resData.status === "ok") {
+        console.log(`
 🔑 授权验证通过: ${resData.msg}`);
-      return {
-        status: 1,
-        msg: resData.msg,
-        minTime: resData.min_time,
-        maxTime: resData.max_time
-      };
-    } else {
+        return {
+          status: 1,
+          msg: resData.msg,
+          minTime: resData.min_time,
+          maxTime: resData.max_time
+        };
+      }
       console.log(`
 🚫 授权被拦截: ${resData.msg}`);
       return { status: -1, msg: resData.msg };
+    } catch (error) {
+      console.log(
+        `
+🌐 网络异常，无法连接到验证服务器。(第 ${attempt}/${CHECK_AUTH_NETWORK_MAX_ATTEMPTS} 次)`
+      );
+      if (attempt < CHECK_AUTH_NETWORK_MAX_ATTEMPTS) {
+        const delayMs = 1e3 * attempt;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+      console.log(`
+🌐 网络异常，已重试仍无法连接到验证服务器。`);
+      return { status: -1, msg: "无法连接验证服务器，请检查网络" };
     }
-  } catch (error) {
-    console.log(`
-🌐 网络异常，无法连接到验证服务器。`);
-    return { status: -1, msg: "无法连接验证服务器，请检查网络" };
   }
+  return { status: -1, msg: "无法连接验证服务器，请检查网络" };
 }
 const recordTaskStatus = (dramaInfo, configData, status, message = "") => {
   const statusFile = path.join(rootDir, "task_execution_log.csv");
@@ -178,18 +190,48 @@ function getDateRangeByType(type) {
   };
 }
 let accountsCache = null;
+const readRowsFromJsonPayload = (filePath) => {
+  const content = fs.readFileSync(filePath, "utf-8");
+  const parsed = JSON.parse(content);
+  if (Array.isArray(parsed)) return parsed;
+  if (Array.isArray(parsed?.rows)) return parsed.rows;
+  return [];
+};
+const getNormalizedSidecarPath = (filePath) => `${filePath}.normalized.json`;
+function shouldReadFromSidecar(filePath, sidecarPath) {
+  if (!fs.existsSync(sidecarPath)) return false;
+  if (!fs.existsSync(filePath)) return true;
+  try {
+    return fs.statSync(filePath).mtimeMs <= fs.statSync(sidecarPath).mtimeMs;
+  } catch {
+    return true;
+  }
+}
+function readTabularRows(filePath) {
+  try {
+    const sidecarPath = getNormalizedSidecarPath(filePath);
+    if (shouldReadFromSidecar(filePath, sidecarPath)) {
+      return readRowsFromJsonPayload(sidecarPath);
+    }
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === ".json") {
+      return readRowsFromJsonPayload(filePath);
+    }
+    const workbook = xlsx.readFile(filePath);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    return xlsx.utils.sheet_to_json(sheet, { defval: "", raw: false });
+  } catch (error) {
+    console.error(`❌ 读取表格数据失败: ${error.message}`);
+    return [];
+  }
+}
 function getCachedAccounts(filePath) {
   if (accountsCache) {
     return accountsCache;
   }
-  console.log("📂 [工具类] 正在读取账号库 Excel 到内存...");
+  console.log("📂 [工具类] 正在读取账号库文件到内存...");
   try {
-    const workbook = xlsx.readFile(filePath);
-    const rows = xlsx.utils.sheet_to_json(
-      workbook.Sheets[workbook.SheetNames[0]],
-      { defval: "", raw: false }
-      // raw: false 防止长数字变为科学计数法
-    );
+    const rows = readTabularRows(filePath);
     accountsCache = rows;
     console.log(`✅ 账号库加载完毕，共 ${rows.length} 条记录。`);
     return rows;
@@ -201,46 +243,108 @@ function getCachedAccounts(filePath) {
 function clearAccountsCache() {
   accountsCache = null;
 }
-typeof process.pkg !== "undefined";
-let minTime = null;
-let maxTime = null;
-let uiSender = null;
-let CONFIG$1 = null;
-let uiSelectedExcelPath = null;
-let isCancelled = false;
-const originalLog = console.log;
-console.log = function(...args) {
-  originalLog.apply(console, args);
-  if (uiSender) {
-    const msg = util.format(...args);
-    uiSender.send("log-update", msg);
-  }
+const getTodayString = () => {
+  const date = /* @__PURE__ */ new Date();
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 };
-const originalError = console.error;
-console.error = function(...args) {
-  originalError.apply(console, args);
-  if (uiSender) {
-    const msg = util.format(...args);
-    uiSender.send("log-update", `<span style="color:red;">❌ ${msg}</span>`);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const DEFAULT_DRAMA_MODULE_ID = 10003;
+function pickDramaModuleId(modules) {
+  const list = Array.isArray(modules) ? modules : [];
+  const opened = list.filter((m) => m && m.isOpen !== false);
+  const byName = opened.find((m) => String(m.moduleName || "").includes("短剧")) || list.find((m) => String(m.moduleName || "").includes("短剧"));
+  if (byName?.moduleId != null) return Number(byName.moduleId);
+  if (opened[0]?.moduleId != null) return Number(opened[0].moduleId);
+  if (list[0]?.moduleId != null) return Number(list[0].moduleId);
+  return DEFAULT_DRAMA_MODULE_ID;
+}
+async function selectModule(authClient, sessionId, moduleId) {
+  const headers = {
+    authorization: sessionId,
+    cookie: `ocpx_session_id=${sessionId}`
+  };
+  const res = await authClient.post(
+    "/merchant/auth/login2",
+    { moduleId },
+    { headers }
+  );
+  const code = res.data?.code;
+  if (code !== 0 && code !== "0") {
+    throw new Error(
+      `选择模块失败(moduleId=${moduleId}): ${code ?? ""} ${res.data?.msg || "未知错误"}`
+    );
   }
-};
-const CONFIGData = {
-  BASE_URL: "https://api.iocpx.com",
-  SESSION_FILE: path.join(rootDir, "session.json"),
-  BOOK_FILE: path.join(rootDir, "剧单.xlsx"),
-  TEMPLATE_FILE: path.join(rootDir, "模板_付费.xlsx")
-};
-const client = axios.create({
-  baseURL: CONFIGData.BASE_URL,
-  timeout: 15e3,
-  headers: {
-    "Content-Type": "application/json",
-    Origin: "https://console.iocpx.com",
-    Referer: "https://console.iocpx.com/"
+  return headers;
+}
+async function ensureAuth(account, password, currentSession = null, baseUrl = "https://api.iocpx.com") {
+  let sessionId = "";
+  const authClient = axios.create({
+    baseURL: baseUrl,
+    timeout: 15e3,
+    headers: {
+      "Content-Type": "application/json",
+      Origin: "https://console.iocpx.com",
+      Referer: "https://console.iocpx.com/"
+    }
+  });
+  if (currentSession?.token && Date.now() - (currentSession.time || 0) < 6 * 24 * 60 * 60 * 1e3) {
+    sessionId = currentSession.token;
+    try {
+      const testHeaders = {
+        authorization: sessionId,
+        cookie: `ocpx_session_id=${sessionId}`
+      };
+      let testAuthRes = await authClient.get("/merchant/auth/info", { headers: testHeaders });
+      if (testAuthRes.data?.code == 1001000001) {
+        console.log("🔄 [鉴权服务] 登录已过期, 准备重新登陆...");
+        sessionId = "";
+      } else {
+        console.log("✅ [鉴权服务] 登录状态有效 (缓存复用)");
+        const moduleId = currentSession.moduleId != null ? Number(currentSession.moduleId) : DEFAULT_DRAMA_MODULE_ID;
+        const headers = await selectModule(authClient, sessionId, moduleId);
+        return {
+          success: true,
+          session: { ...currentSession, moduleId },
+          headers
+        };
+      }
+    } catch (err) {
+      sessionId = "";
+    }
   }
-});
-function getAvailableAccounts(targetConfig, x = CONFIG$1.SETTINGS.ACCOUNT_MATCH_COUNT) {
-  const rows = getCachedAccounts(CONFIG$1.FILES.ACCOUNTS);
+  if (!sessionId) {
+    console.log("🔐 [鉴权服务] 正在执行自动登录...");
+    if (!account || !password) {
+      return { success: false, msg: "未配置主账号或密码，请前往系统设置填写" };
+    }
+    try {
+      const r1 = await authClient.post("/merchant/auth/login1", {
+        email: account,
+        password,
+        rememberMe: true
+      });
+      if (r1.data?.code !== 0 && r1.data?.code !== "0") {
+        throw new Error(r1.data?.msg || `login1 失败: ${r1.data?.code}`);
+      }
+      const setCookie = r1.headers["set-cookie"];
+      if (!setCookie) throw new Error("未获取到 Cookie 信息");
+      sessionId = setCookie.find((s) => s.startsWith("ocpx_session_id=")).split(";")[0].split("=")[1];
+      const moduleId = pickDramaModuleId(r1.data?.data);
+      const newHeaders = await selectModule(authClient, sessionId, moduleId);
+      const newSession = { token: sessionId, time: Date.now(), moduleId };
+      console.log(`✅ [鉴权服务] 账号密码自动登录成功！已选择模块 moduleId=${moduleId}`);
+      return { success: true, session: newSession, headers: newHeaders };
+    } catch (err) {
+      console.error("❌ [鉴权服务] 登录失败:", err.message);
+      return { success: false, msg: `登录失败: ${err.message}` };
+    }
+  }
+}
+function pickAccountsForPublish(rows, targetConfig, businessType, matchCount) {
+  if (!Array.isArray(rows)) return [];
   const availableRows = rows.filter((row) => {
     const accountStr = String(row["账号"] || "").trim();
     if (!accountStr || accountStr === "undefined") {
@@ -254,7 +358,7 @@ function getAvailableAccounts(targetConfig, x = CONFIG$1.SETTINGS.ACCOUNT_MATCH_
     let subjectMatch = false;
     const rowSubject = String(row["主体"]).trim();
     const targetSubject = String(targetConfig.subject).trim();
-    if (CONFIG$1.FILES.BUSINESS_TYPE === "端原生-付费短剧") {
+    if (businessType === "端原生-付费短剧") {
       const rowVal = Math.floor(parseFloat(rowSubject));
       const targetVal = Math.floor(parseFloat(targetSubject));
       if (!isNaN(rowVal) && !isNaN(targetVal)) {
@@ -268,126 +372,154 @@ function getAvailableAccounts(targetConfig, x = CONFIG$1.SETTINGS.ACCOUNT_MATCH_
     return subjectMatch;
   });
   const shuffled = availableRows.sort(() => 0.5 - Math.random());
-  const countToTake = Math.min(shuffled.length, x);
+  const countToTake = Math.min(shuffled.length, matchCount);
   return shuffled.slice(0, countToTake).map((row) => String(row["账号"]).trim());
+}
+function findMaterialFolderByName(materialFileNameList, fileName) {
+  if (!materialFileNameList || !Array.isArray(materialFileNameList) || materialFileNameList.length === 0 || !fileName) {
+    return void 0;
+  }
+  return materialFileNameList.find(
+    (item) => item.name === clearSpaces(fileName)
+  );
+}
+typeof process.pkg !== "undefined";
+let minTime = null;
+let maxTime = null;
+let uiSender = null;
+let CONFIG$1 = null;
+let uiSelectedExcelPath = null;
+let isCancelled = false;
+let requestThrottleMultiplier = 1;
+const throttleMs = (ms) => {
+  const n = Number(ms) || 0;
+  return Math.max(0, Math.round(n * requestThrottleMultiplier));
+};
+const sleepWithThrottle = (ms) => new Promise((resolve) => setTimeout(resolve, throttleMs(ms)));
+const randomSleepWithThrottle = (min, max, getCancelStatus) => {
+  const scaledMin = throttleMs(min);
+  const scaledMax = throttleMs(max);
+  return randomSleep(
+    Math.min(scaledMin, scaledMax),
+    Math.max(scaledMin, scaledMax),
+    getCancelStatus
+  );
+};
+const c = console;
+const logToTerminal = c.log.bind(c);
+const errToTerminal = c.error.bind(c);
+const warnToTerminal = c.warn.bind(c);
+function taskUiLog(...args) {
+  logToTerminal(...args);
+  if (uiSender) {
+    uiSender.send("log-update", util.format(...args));
+  }
+}
+function taskUiError(...args) {
+  errToTerminal(...args);
+  if (uiSender) {
+    const msg = util.format(...args);
+    uiSender.send("log-update", `<span style="color:red;">❌ ${msg}</span>`);
+  }
+}
+function taskUiWarn(...args) {
+  warnToTerminal(...args);
+  if (uiSender) {
+    uiSender.send(
+      "log-update",
+      `<span style="color:#e6a23c;">⚠️ ${util.format(...args)}</span>`
+    );
+  }
+}
+const CONFIGData = {
+  BASE_URL: "https://api.iocpx.com",
+  SESSION_FILE: path.join(rootDir, "session.json"),
+  BOOK_FILE: path.join(rootDir, "剧单.xlsx"),
+  TEMPLATE_FILE: path.join(rootDir, "模板_付费.xlsx")
+};
+let globalSession = { token: "", time: 0 };
+const client = axios.create({
+  baseURL: CONFIGData.BASE_URL,
+  timeout: 15e3,
+  headers: {
+    "Content-Type": "application/json",
+    Origin: "https://console.iocpx.com",
+    Referer: "https://console.iocpx.com/"
+  }
+});
+client.interceptors.request.use((config) => {
+  if (globalSession && globalSession.token) {
+    config.headers["authorization"] = globalSession.token;
+    config.headers["cookie"] = `ocpx_session_id=${globalSession.token}`;
+  }
+  return config;
+}, (error) => {
+  return Promise.reject(error);
+});
+function getAvailableAccounts(targetConfig, x = CONFIG$1.SETTINGS.ACCOUNT_MATCH_COUNT) {
+  const rows = getCachedAccounts(CONFIG$1.FILES.ACCOUNTS);
+  return pickAccountsForPublish(
+    rows,
+    targetConfig,
+    CONFIG$1.FILES.BUSINESS_TYPE,
+    x
+  );
 }
 const writeApiLog = (step, params, response) => {
   return;
 };
-let globalSession = { token: "", time: 0 };
-async function ensureAuth() {
-  let sessionId = "";
-  if (globalSession.token && Date.now() - globalSession.time < 6 * 24 * 60 * 60 * 1e3) {
-    sessionId = globalSession.token;
-  }
-  if (sessionId) {
-    try {
-      const testHeaders = {
-        authorization: sessionId,
-        cookie: `ocpx_session_id=${sessionId}`
-      };
-      let testAuthRes = await client.get("/merchant/auth/info", {
-        headers: testHeaders
-      });
-      if (testAuthRes.data?.code == 1001000001) {
-        console.log("🔄 登录已过期, 准备重新登陆...");
-        sessionId = "";
-        globalSession = { token: "", time: 0 };
-      } else {
-        console.log("✅ 登录状态有效 (内存复用)");
-        await client.post(
-          "/merchant/auth/login2",
-          { moduleId: 3 },
-          { headers: testHeaders }
-        );
-        client.defaults.headers.common["authorization"] = sessionId;
-        client.defaults.headers.common["cookie"] = `ocpx_session_id=${sessionId}`;
-        return true;
-      }
-    } catch (err) {
-      sessionId = "";
-      globalSession = { token: "", time: 0 };
-    }
-  }
-  if (!sessionId) {
-    console.log("🔐 正在执行自动登录...");
-    delete client.defaults.headers.common["authorization"];
-    delete client.defaults.headers.common["cookie"];
-    const { account, password } = CONFIG$1.WORKING_CONFIG;
-    if (!account || !password) {
-      console.error("❌ 无法登录：未获取到主账号或密码");
-      return false;
-    }
-    try {
-      const r1 = await client.post("/merchant/auth/login1", {
-        email: account,
-        password,
-        rememberMe: true
-      });
-      const setCookie = r1.headers["set-cookie"];
-      sessionId = setCookie.find((s) => s.startsWith("ocpx_session_id=")).split(";")[0].split("=")[1];
-      await client.post(
-        "/merchant/auth/login2",
-        { moduleId: 3 },
-        { headers: { cookie: `ocpx_session_id=${sessionId}` } }
-      );
-      globalSession = {
-        token: sessionId,
-        time: Date.now()
-      };
-      if (uiSender) {
-        uiSender.send("save-session-persistent", globalSession);
-      }
-      console.log("✅ 登录成功");
-    } catch (err) {
-      console.error("❌ 登录失败:", err.message);
-      return false;
-    }
-  }
-  client.defaults.headers.common["authorization"] = sessionId;
-  client.defaults.headers.common["cookie"] = `ocpx_session_id=${sessionId}`;
-  return true;
-}
-let materialFileNameList = null;
-async function getMaterialFileName() {
-  let materialFileNameRaw = null;
-  materialFileNameRaw = await client.post("adv-asset-inside/folder/search", {
-    pageNo: 1,
-    pageSize: 150,
-    query: null,
-    projectId: null,
-    libraryType: "public",
-    showPrivateOnly: false,
-    queryPolicy: "ft"
-  });
-  materialFileNameList = materialFileNameRaw?.data?.data?.list;
-}
-function getTargetMaterialFileId(fileName) {
-  if (materialFileNameList && Array.isArray(materialFileNameList) && materialFileNameList.length > 0 && fileName) {
-    return materialFileNameList.find((item) => {
-      return item.name === clearSpaces(fileName);
-    });
-  }
-}
 const GLOBAL_CACHE = {
   dramaInfo: {},
   linkTemplate: {},
   strategy: {},
   titlePackage: {},
-  accountsList: null
+  accountsList: null,
+  materials: {},
+  // 🌟 新增：素材专属缓存池
+  materialFolders: {}
+  // 素材文件夹搜索（按 query 维度缓存）
 };
 async function getDataWithCache(type, key, fetchFn) {
   const shortKey = key.length > 20 ? key.substring(0, 20) + "..." : key;
   if (GLOBAL_CACHE[type] && GLOBAL_CACHE[type][key]) {
-    console.log(`   ⚡ [缓存命中] ${type}: ${shortKey}`);
+    taskUiLog(`   ⚡ [缓存命中] ${type}: ${shortKey}`);
     return GLOBAL_CACHE[type][key];
   }
-  console.log(`   🌐 [发起请求] ${type}: ${shortKey}`);
+  taskUiLog(`   🌐 [发起请求] ${type}: ${shortKey}`);
   const data = await fetchFn();
   if (data) {
     GLOBAL_CACHE[type][key] = data;
   }
   return data;
+}
+async function getMaterialFolderListCached(materialFileNameQuery) {
+  const q = clearSpaces(materialFileNameQuery);
+  if (!q) return [];
+  return getDataWithCache("materialFolders", q, async () => {
+    const res = await client.post("adv-asset-inside/folder/search", {
+      pageNo: 1,
+      pageSize: 150,
+      query: q,
+      projectId: null,
+      libraryType: "public",
+      showPrivateOnly: false,
+      queryPolicy: "ft"
+    });
+    return res?.data?.data?.list || [];
+  });
+}
+function materialNameMatchesSearch(adPlatformMaterialName, searchName) {
+  const materialName = (adPlatformMaterialName || "").replace(/[\x00-\x1f\x7f\xa0]/g, "").trim();
+  const targetName = (searchName || "").trim();
+  if (!targetName) return true;
+  if (materialName === targetName) return true;
+  const materialParts = materialName.split(/[-—_]/).map((part) => part.trim()).filter(Boolean);
+  if (materialParts.includes(targetName)) return true;
+  const searchParts = targetName.split(/[-—_]/).map((part) => part.trim()).filter(Boolean);
+  if (searchParts.length > 1) {
+    return searchParts.every((part) => materialParts.includes(part));
+  }
+  return false;
 }
 async function generatePublishPayload(dramaInfo, proConfigData) {
   const productName = clearSpaces(dramaInfo.targetDramaName);
@@ -401,6 +533,7 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
   const specifyMaterialsArr = smartSplit(dramaInfo.specifyMaterials);
   const materialDateRangeData = dramaInfo.materialDateRange || CONFIG$1.FILES.dateRange;
   let searchProductName = testDramaName ? testDramaName : productName;
+  const target_bid = proConfigData.proConfig_bid || proConfigData.proConfig_subject;
   try {
     const dramaCacheKey = `${productName}_${CONFIG$1.FILES.BUSINESS_TYPE}_${copyrightData}`;
     const productDataList = await getDataWithCache(
@@ -408,6 +541,7 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       dramaCacheKey,
       async () => {
         let resbookParmas = {
+          bookName: productName,
           key: productName,
           pageNo: 1,
           linkType: CONFIG$1.FILES.BUSINESS_TYPE === "端原生-付费短剧" ? "IAP" : "IAA",
@@ -436,12 +570,13 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
         return productData;
       }
     );
+    if (isCancelled) return null;
     if (!productDataList || productDataList.length === 0) {
       throw new Error(`未找到剧集信息或版权不匹配: ${productName}`);
     }
     let productInfo;
     if (CONFIG$1.FILES.BUSINESS_TYPE === "端原生-付费短剧") {
-      productInfo = matchByInput(productDataList, proConfig_subjectId);
+      productInfo = matchByInput(productDataList, target_bid);
     } else {
       productInfo = productDataList?.[0];
     }
@@ -485,7 +620,8 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
     const accountIds = getAvailableAccounts({
       email: proConfigData.proConfig_email,
       copyright: proConfigData.proConfig_copyright,
-      subject: proConfigData.proConfig_subject
+      subject: proConfigData.proConfig_subject,
+      bid: proConfigData.proConfig_bid
     });
     if (Array.isArray(accountIds) && accountIds.length == 0)
       throw new Error(`未获取到可用账号`);
@@ -494,96 +630,155 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       accountIds
     );
     const accountData = getAccount.data?.data;
-    if (!accountData) throw new Error(`未获取账户信息,${accountIds}`);
-    let accountList = accountData.map((item) => item.advertiserName);
-    let idsList = accountData.map((item) => item.advertiserId);
-    await randomSleep(minTime, maxTime);
-    let tarMaterItem;
-    if (materialFileNameData) {
-      tarMaterItem = getTargetMaterialFileId(materialFileNameData);
-    }
-    let resAsset;
-    let materials = [];
-    let rankingListOrLibrarySign = "";
-    let isSpecify = Array.isArray(specifyMaterialsArr) && specifyMaterialsArr.length > 0;
-    console.log(`   🔍 正在搜索素材 (Key: ${searchProductName})...`);
-    let rangeDataObj = getDateRangeByType(materialDateRangeData);
-    if (isSpecify) {
-      rankingListOrLibrarySign = "素材库";
-      let _materialPar = {
-        queryPolicy: "em",
-        query: "",
-        showPrivateOnly: false,
-        sortingFields: [{ field: "updateTime", order: "desc" }],
-        includeFolder: false,
-        fullNames: specifyMaterialsArr,
-        libraryType: "public",
-        pageNo: 1,
-        pageSize: 20
-      };
-      if (tarMaterItem?.id) _materialPar.folderId = tarMaterItem?.id;
-      resAsset = await client.post("/adv-asset-inside/search", _materialPar);
-      const rawMaterials = resAsset.data?.data?.materials || [];
-      materials = rawMaterials.filter((item) => item.url && item.coverUrl);
-    } else if (!testDramaName) {
-      rankingListOrLibrarySign = "素材榜单";
-      const now = /* @__PURE__ */ new Date();
-      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-      resAsset = await client.post(
-        "/adv-report-query/materialDay/getLatestCostByDayRangeV2",
-        {
-          materialInfo: searchProductName,
-          startDay: rangeDataObj.startDay,
-          endDay: rangeDataObj.endDay,
-          sortingFields: [{ field: "statCost", order: "desc" }],
-          pageNo: 1,
-          pageSize
-        }
+    if (!Array.isArray(accountData) || accountData.length === 0) {
+      throw new Error(
+        `账号库匹配到的账号无效或已失效，请检查账号文件中的「账号」列是否为可用 advertiserId。匹配结果: ${accountIds.join(",")}`
       );
-      let rawList = resAsset.data?.data?.list || [];
-      materials = rawList.filter((item) => item.videoUrl && item.poster);
-      if (copyrightData == "ZZ番茄" && materials.length > 0) {
-        materials = materials.filter(
-          (materItem) => clearSpaces(materItem.bookName) == productName
-        );
+    }
+    let accountListName = accountData.map((item) => String(item?.advertiserName || "").trim()).filter(Boolean);
+    let idsList = accountData.map((item) => item?.advertiserId).filter((id) => id !== void 0 && id !== null && String(id).trim() !== "").map((id) => String(id).trim());
+    if (idsList.length === 0) {
+      throw new Error(
+        `未获取到有效账户ID，请检查账号文件中的「账号」列数据。匹配结果: ${accountIds.join(",")}`
+      );
+    }
+    const accListData = accountData.map((ele) => ({
+      id: ele.advertiserId,
+      name: ele.advertiserName,
+      uniqueId: ele.advertiserId,
+      company: ele.company
+    }));
+    await randomSleepWithThrottle(minTime, maxTime, () => isCancelled);
+    if (isCancelled) return null;
+    const rankingType = CONFIG$1.SETTINGS.RANKING_TYPE || "material";
+    const isLibraryMode = rankingType === "library";
+    const isCompanyRanking = rankingType === "company";
+    let isSpecify = Array.isArray(specifyMaterialsArr) && specifyMaterialsArr.length > 0;
+    let rangeDataObj = getDateRangeByType(materialDateRangeData);
+    let tarMaterItem;
+    if (isLibraryMode && materialFileNameData) {
+      const folderList = await getMaterialFolderListCached(materialFileNameData);
+      tarMaterItem = findMaterialFolderByName(folderList, materialFileNameData);
+    }
+    let rankingListOrLibrarySign = "";
+    const specifyKeyStr = isSpecify ? specifyMaterialsArr.join("-") : "none";
+    const folderIdStr = isLibraryMode ? tarMaterItem?.id || "nofolder" : "nofolder";
+    const materialCacheKey = `mat_${rankingType}_${searchProductName}_${rangeDataObj.startDay}_${rangeDataObj.endDay}_${specifyKeyStr}_${folderIdStr}_${copyrightData}`;
+    taskUiLog(`   🔍 准备获取素材 (Key: ${searchProductName})...`);
+    let materials = await getDataWithCache(
+      "materials",
+      materialCacheKey,
+      async () => {
+        let fetchMaterials = [];
+        let resAsset;
+        if (isLibraryMode) {
+          if (isSpecify) {
+            let _materialPar = {
+              queryPolicy: "em",
+              query: "",
+              showPrivateOnly: false,
+              sortingFields: [{ field: "updateTime", order: "desc" }],
+              includeFolder: false,
+              fullNames: specifyMaterialsArr,
+              libraryType: "public",
+              pageNo: 1,
+              pageSize: 20
+            };
+            if (tarMaterItem?.id) _materialPar.folderId = tarMaterItem.id;
+            resAsset = await client.post("/adv-asset-inside/search", _materialPar);
+            const rawMaterials = resAsset.data?.data?.materials || [];
+            fetchMaterials = rawMaterials.filter((item) => item.url && item.coverUrl);
+          } else {
+            let _Materialpar2 = {
+              queryPolicy: "em",
+              query: searchProductName,
+              showPrivateOnly: false,
+              partOfFullName: true,
+              libraryType: "public",
+              pageNo: 1,
+              pageSize,
+              sortingFields: [{ field: "updateTime", order: "desc" }]
+            };
+            if (tarMaterItem?.id) _Materialpar2.folderId = tarMaterItem.id;
+            resAsset = await client.post("/adv-asset-inside/search", _Materialpar2);
+            const rawMaterials = resAsset.data?.data?.materials || [];
+            fetchMaterials = rawMaterials.filter((item) => item.url && item.coverUrl);
+          }
+        } else {
+          if (isCompanyRanking) {
+            resAsset = await client.post(
+              "/adv-report-query/materialDay/getTenantCumSumBefore",
+              {
+                materialInfo: searchProductName,
+                sortingFields: [{ field: "statCost", order: "desc" }],
+                pageNo: 1,
+                pageSize
+              }
+            );
+          } else {
+            resAsset = await client.post(
+              "/adv-report-query/materialDay/getLatestCostByDayRangeV2",
+              {
+                materialInfo: searchProductName,
+                startDay: rangeDataObj.startDay,
+                endDay: rangeDataObj.endDay,
+                sortingFields: [{ field: "statCost", order: "desc" }],
+                pageNo: 1,
+                pageSize
+              }
+            );
+          }
+          let rawList = resAsset.data?.data?.list || [];
+          fetchMaterials = rawList.filter((item) => item.videoUrl && item.poster);
+          fetchMaterials = fetchMaterials.filter(
+            (materItem) => materialNameMatchesSearch(
+              materItem.adPlatformMaterialName,
+              searchProductName
+            )
+          );
+          if (isSpecify) {
+            const specifySet = new Set(
+              specifyMaterialsArr.map(
+                (name) => name.replace(/[\x00-\x1f\x7f\xa0]/g, "").trim()
+              )
+            );
+            fetchMaterials = fetchMaterials.filter((item) => {
+              const name = (item.adPlatformMaterialName || "").replace(/[\x00-\x1f\x7f\xa0]/g, "").trim();
+              return specifySet.has(name);
+            });
+          }
+          if (fetchMaterials.length > 0) {
+            let materialscheckArr = fetchMaterials.map((item) => item.materialId);
+            let checkRes = await client.post("/adv-asset-inside/material/findId", {
+              oceanengineMaterialIds: materialscheckArr
+            });
+            let mappingTable = checkRes.data?.data || {};
+            fetchMaterials = fetchMaterials.map((ele) => ({
+              ...ele,
+              mappingId: mappingTable[ele.materialId] || null
+            }));
+          }
+        }
+        return fetchMaterials;
       }
-      if (materials.length > 0) {
-        let materialscheckArr = materials.map((item) => item.materialId);
-        let checkRes = await client.post("/adv-asset-inside/material/findId", {
-          oceanengineMaterialIds: materialscheckArr
-        });
-        let mappingTable = checkRes.data?.data || {};
-        materials = materials.map((ele) => ({
-          ...ele,
-          mappingId: mappingTable[ele.materialId] || null
-        }));
-      }
-    } else {
+    );
+    if (isCancelled) return null;
+    if (isLibraryMode) {
       rankingListOrLibrarySign = "素材库";
-      let _Materialpar2 = {
-        queryPolicy: "em",
-        query: searchProductName,
-        showPrivateOnly: false,
-        partOfFullName: true,
-        libraryType: "public",
-        pageNo: 1,
-        pageSize,
-        sortingFields: [{ field: "updateTime", order: "desc" }]
-      };
-      if (tarMaterItem?.id) _Materialpar2.folderId = tarMaterItem?.id;
-      resAsset = await client.post("/adv-asset-inside/search", _Materialpar2);
-      const rawMaterials = resAsset.data?.data?.materials || [];
-      materials = rawMaterials.filter((item) => item.url && item.coverUrl);
+    } else if (isCompanyRanking) {
+      rankingListOrLibrarySign = "公司榜单";
+    } else {
+      rankingListOrLibrarySign = "素材榜单";
     }
     if (!materials || materials.length === 0)
       throw new Error(`素材查询结果为空`);
-    console.log(
+    taskUiLog(
       `   🎬 素材获取成功: ${materials.length} 条 (${rankingListOrLibrarySign})`
     );
     const ydData = ("0" + ((/* @__PURE__ */ new Date()).getMonth() + 1)).slice(-2) + ("0" + (/* @__PURE__ */ new Date()).getDate()).slice(-2);
     const finalPublishName = `${productInfo.bookName}_${ydData}`;
     let materialInfoData = null;
-    if (rankingListOrLibrarySign === "素材榜单") {
+    if (rankingListOrLibrarySign !== "素材库") {
       materialInfoData = JSON.stringify(
         materials.map((item) => ({
           id: `${item.materialId}-${item.platform}`,
@@ -617,11 +812,16 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       parseInt(dramaInfo.adsNumNew || CONFIG$1.FILES.ADS_NUM) || 1
     );
     let materialsSize = Math.min(materials.length, 30);
+    let isBeta = CONFIG$1.SETTINGS.ACTION == "publishBeta";
+    const typeVal = isBeta ? "4" : "0";
     const payload1 = {
-      type: 0,
+      type: typeVal,
+      // type: "4",//beta版本
+      // type: 0,
       bookName: productInfo.bookName,
       bookId: productInfo.bookId,
       source: productInfo.source,
+      thumbUrl: productInfo.thumbUrl,
       playletSeriesUrl: productInfo.link,
       appType: linkTemplate.appType,
       promotionLinkTemplateId: linkTemplate.id,
@@ -632,14 +832,17 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       promotionStrategyName: strategy.name,
       bidType: strategy.bidType,
       landingType: strategy.landingType,
-      strategyType: 1,
+      strategyType: 3,
+      //3为项目内平铺 2为账户内平铺
       titleNum: 10,
       titlePackageIds: `[${titlePackage.id}]`,
       titleTextList: "[]",
       folderIdPaths: "[]",
       commentMaterialList: "[]",
       projectNum: pro_num,
-      advertNum: ads_num,
+      advertNum: 0,
+      //当为项目内平铺时，这个为0
+      // advertNum: ads_num,
       note: "",
       actionTrackUrl: "",
       projectName: "",
@@ -657,14 +860,15 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       materialNum: materialsSize,
       materialInfo: materialInfoData,
       advertiserIds: JSON.stringify(idsList),
-      advertiserNames: JSON.stringify(accountList),
-      publishName: finalPublishName
+      advertiserNames: JSON.stringify(accountListName),
+      publishName: finalPublishName,
+      accountList: JSON.stringify(accListData),
+      deliveryStrategyType: false,
+      folderIdPaths: "[]",
+      materialMode: 0,
+      awemeId: "",
+      deliveryStrategyInfo: "{}"
     };
-    if (CONFIG$1.FILES.isAccountFlat) {
-      payload1.strategyType = 2;
-      payload1.advertNum = 0;
-      payload1.projectNum = 0;
-    }
     return {
       payload1,
       meta: {
@@ -675,21 +879,21 @@ async function generatePublishPayload(dramaInfo, proConfigData) {
       }
     };
   } catch (err) {
-    console.error(`❌ [${productName}] 数据组装失败: ${err.message}`);
+    taskUiError(`❌ [${productName}] 数据组装失败: ${err.message}`);
     recordTaskStatus(dramaInfo, proConfigData, "ERROR", err.message);
     return null;
   }
 }
 async function submitBatchTasks(taskList) {
   if (!taskList || taskList.length === 0) return;
-  const isPublish = CONFIG$1.SETTINGS.ACTION === "publish";
-  console.log(
+  const isPublish = CONFIG$1.SETTINGS.ACTION?.includes("publish");
+  taskUiLog(
     `
 🚀 [${isPublish ? "正式发布" : "测试模式"}] 开始处理 ${taskList.length} 个任务...`
   );
   try {
     const payload1List = taskList.map((t) => t.payload1);
-    console.log(`⏳ 正在请求创建模板 (insert)...`);
+    taskUiLog(`⏳ 正在请求创建模板 (insert)...`);
     const resInsert = await client.post(
       "/adv-release-toutiao/publishTemplate/insert",
       payload1List
@@ -705,7 +909,7 @@ async function submitBatchTasks(taskList) {
         `批量创建模板失败: ${resInsert.data?.msg || "返回数据为空"}`
       );
     }
-    console.log(`✅ 模板创建成功，获取到 ${resultList.length} 个 ID`);
+    taskUiLog(`✅ 模板创建成功，获取到 ${resultList.length} 个 ID`);
     const payload2List = [];
     const successTasks = [];
     for (let i = 0; i < resultList.length; i++) {
@@ -731,26 +935,26 @@ async function submitBatchTasks(taskList) {
       }
     }
     if (payload2List.length === 0) {
-      console.warn("⚠️ 本批次无有效模板，跳过后续步骤");
+      taskUiWarn("⚠️ 本批次无有效模板，跳过后续步骤");
       return;
     }
-    console.log(`⏳ 模板已就绪，正在缓冲等待，准备最终提交...`);
-    await randomSleep(1e3, 2e3);
-    console.log(
+    taskUiLog(`⏳ 模板已就绪，正在缓冲等待，准备最终提交...`);
+    await randomSleepWithThrottle(1e3, 2e3);
+    taskUiLog(
       "\n-------------------------------------------------------------"
     );
-    console.log(`📋 准备提交的数据 (${payload2List.length} 条):`);
+    taskUiLog(`📋 准备提交的数据 (${payload2List.length} 条):`);
     payload2List.forEach((p, idx) => {
-      console.log(
+      taskUiLog(
         `   ${idx + 1}. 模板ID: ${p.publishTemplateId} | 剧名: ${p.bookName} | 策略: ${p.promotionStrategyName}`
       );
     });
-    console.log(
+    taskUiLog(
       "-------------------------------------------------------------\n"
     );
     if (!isPublish) {
-      console.log("🛑 [测试阻断] 已暂停最终提交 (publishInstance/batchInsert)");
-      console.log("✅ 测试流程结束，数据已生成，未消耗真实配额。\n");
+      taskUiLog("🛑 [测试阻断] 已暂停最终提交 (publishInstance/batchInsert)");
+      taskUiLog("✅ 测试流程结束，数据已生成，未消耗真实配额。\n");
       return;
     }
     const resInstance = await client.post(
@@ -763,7 +967,7 @@ async function submitBatchTasks(taskList) {
       resInstance
     );
     if (resInstance.data.code === 0) {
-      console.log(`✨ [批量执行] ${payload2List.length} 个任务全部提交成功！`);
+      taskUiLog(`✨ [批量执行] ${payload2List.length} 个任务全部提交成功！`);
       for (const successItem of successTasks) {
         const { task, templateId } = successItem;
         recordTaskStatus(
@@ -775,7 +979,7 @@ async function submitBatchTasks(taskList) {
       }
     } else {
       const errorMsg = resInstance.data.msg || "接口错误";
-      console.error(`❌ [批量执行] Instance 提交失败: ${errorMsg}`);
+      taskUiError(`❌ [批量执行] Instance 提交失败: ${errorMsg}`);
       successTasks.forEach((item) => {
         recordTaskStatus(
           item.task.meta.dramaInfo,
@@ -786,7 +990,7 @@ async function submitBatchTasks(taskList) {
       });
     }
   } catch (err) {
-    console.error(`❌ [测试阶段] 发生异常: ${err.message}`);
+    taskUiError(`❌ [测试阶段] 发生异常: ${err.message}`);
     taskList.forEach((t) => {
       recordTaskStatus(
         t.meta.dramaInfo,
@@ -798,15 +1002,11 @@ async function submitBatchTasks(taskList) {
   }
 }
 async function getDramaCount() {
-  const workbook = xlsx.readFile(CONFIG$1.FILES.DRAMA_LIST);
-  return xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]).length;
+  return readTabularRows(CONFIG$1.FILES.DRAMA_LIST).length;
 }
 async function loadDramaData(index) {
   const filePath = uiSelectedExcelPath || CONFIG$1.FILES.DRAMA_LIST;
-  const workbook = xlsx.readFile(filePath);
-  const data = xlsx.utils.sheet_to_json(
-    workbook.Sheets[workbook.SheetNames[0]]
-  );
+  const data = readTabularRows(filePath);
   if (!data[index]) return null;
   const row = data[index];
   let DRAMA_FIELD_NAMES = CONFIG$1.DRAMA_FIELD_NAMES;
@@ -829,140 +1029,169 @@ async function loadDramaData(index) {
 }
 async function runAutoTask(sender, uiConfig) {
   uiSender = sender;
-  CONFIG$1 = uiConfig;
-  uiSelectedExcelPath = CONFIG$1.FILES.DRAMA_LIST;
-  clearAccountsCache();
-  GLOBAL_CACHE.dramaInfo = {};
-  GLOBAL_CACHE.linkTemplate = {};
-  GLOBAL_CACHE.strategy = {};
-  GLOBAL_CACHE.titlePackage = {};
-  if (CONFIG$1.SETTINGS && CONFIG$1.SETTINGS.BASE_URL) {
-    client.defaults.baseURL = CONFIG$1.SETTINGS.BASE_URL;
-  }
-  const authResult = await checkAuth(
-    CONFIG$1.KEY_CONFIG.userKey,
-    CONFIG$1.WORKING_CONFIG.account,
-    CONFIG$1.WORKING_CONFIG.password
-  );
-  if (authResult.status !== 1) throw new Error(authResult.msg);
-  minTime = Number(authResult.minTime);
-  maxTime = Number(authResult.maxTime);
-  if (!await ensureAuth()) return;
   try {
-    const dramaCount = await getDramaCount();
-    console.log(
-      `
+    CONFIG$1 = uiConfig;
+    uiSelectedExcelPath = CONFIG$1.FILES.DRAMA_LIST;
+    clearAccountsCache();
+    GLOBAL_CACHE.dramaInfo = {};
+    GLOBAL_CACHE.linkTemplate = {};
+    GLOBAL_CACHE.strategy = {};
+    GLOBAL_CACHE.titlePackage = {};
+    GLOBAL_CACHE.materials = {};
+    if (CONFIG$1.SETTINGS && CONFIG$1.SETTINGS.BASE_URL) {
+      client.defaults.baseURL = CONFIG$1.SETTINGS.BASE_URL;
+    }
+    const authResult = await checkAuth(
+      CONFIG$1.KEY_CONFIG.userKey,
+      CONFIG$1.WORKING_CONFIG.account,
+      CONFIG$1.WORKING_CONFIG.password
+    );
+    if (authResult.status !== 1) throw new Error(authResult.msg);
+    minTime = Number(authResult.minTime);
+    maxTime = Number(authResult.maxTime);
+    globalSession = CONFIG$1.session || { token: "", time: 0 };
+    const authRes = await ensureAuth(
+      CONFIG$1.WORKING_CONFIG.account,
+      CONFIG$1.WORKING_CONFIG.password,
+      globalSession
+    );
+    if (!authRes.success) {
+      throw new Error(authRes.msg);
+    }
+    globalSession = authRes.session;
+    try {
+      const dramaCount = await getDramaCount();
+      taskUiLog(
+        `
 ===========================================================`
-    );
-    console.log(
-      `🚀 任务启动：共选中 ${CONFIG$1.SELECTED_PROFILES.length} 个方案，总剧集 ${dramaCount} 部`
-    );
-    console.log(`===========================================================`);
-    await getMaterialFileName();
-    isCancelled = false;
-    let globalTaskPool = [];
-    const BATCH_THRESHOLD = 50;
-    for (let pIndex = 0; pIndex < CONFIG$1.SELECTED_PROFILES.length; pIndex++) {
-      if (isCancelled) return;
-      const profile = CONFIG$1.SELECTED_PROFILES[pIndex];
-      console.log(`
+      );
+      taskUiLog(
+        `🚀 任务启动：共选中 ${CONFIG$1.SELECTED_PROFILES.length} 个方案，总剧集 ${dramaCount} 部`
+      );
+      taskUiLog(`===========================================================`);
+      isCancelled = false;
+      let globalTaskPool = [];
+      const BATCH_THRESHOLD = parseInt(CONFIG$1.SETTINGS.BATCH_THRESHOLD, 10) || 50;
+      requestThrottleMultiplier = Number(CONFIG$1.SETTINGS.REQUEST_THROTTLE_MULTIPLIER) || 1;
+      if (requestThrottleMultiplier < 1) requestThrottleMultiplier = 1;
+      taskUiLog(
+        `⚙️ 运行节流系数: x${requestThrottleMultiplier.toFixed(2)} | 批次阈值: ${BATCH_THRESHOLD}`
+      );
+      const defaultAccountMatchCount = parseInt(CONFIG$1.SETTINGS.ACCOUNT_MATCH_COUNT, 10) || 2;
+      for (let pIndex = 0; pIndex < CONFIG$1.SELECTED_PROFILES.length; pIndex++) {
+        if (isCancelled) return;
+        const profile = CONFIG$1.SELECTED_PROFILES[pIndex];
+        taskUiLog(`
 
 🔶 [方案切换] 开始方案: 【${profile.name}】`);
-      CONFIG$1.FILES.TEMPLATE = profile.TEMPLATE;
-      CONFIG$1.FILES.ACCOUNTS = profile.ACCOUNTS;
-      CONFIG$1.FILES.BUSINESS_TYPE = profile.businessType;
-      clearAccountsCache();
-      if (!fs.existsSync(CONFIG$1.FILES.TEMPLATE) || !fs.existsSync(CONFIG$1.FILES.ACCOUNTS)) {
-        console.error(`❌ [方案跳过] 【${profile.name}】文件不完整`);
-        continue;
-      }
-      const workbookTemplate = xlsx.readFile(CONFIG$1.FILES.TEMPLATE);
-      const allTemplates = xlsx.utils.sheet_to_json(
-        workbookTemplate.Sheets[workbookTemplate.SheetNames[0]]
-      );
-      const templateRowCount = allTemplates.length;
-      for (let j = 0; j < dramaCount; j++) {
-        if (isCancelled) return;
-        const dramaInfo = await loadDramaData(j);
-        if (!dramaInfo) continue;
-        console.log(
-          `
+        CONFIG$1.FILES.TEMPLATE = profile.TEMPLATE;
+        CONFIG$1.FILES.ACCOUNTS = profile.ACCOUNTS;
+        CONFIG$1.FILES.BUSINESS_TYPE = profile.businessType;
+        const profileMatchCount = parseInt(profile.accountMatchCount, 10);
+        const shouldUseProfileCount = profile.enableCustomAccountMatchCount === true && Number.isFinite(profileMatchCount) && profileMatchCount > 0;
+        CONFIG$1.SETTINGS.ACCOUNT_MATCH_COUNT = shouldUseProfileCount ? profileMatchCount : defaultAccountMatchCount;
+        clearAccountsCache();
+        if (!fs.existsSync(CONFIG$1.FILES.TEMPLATE) || !fs.existsSync(CONFIG$1.FILES.ACCOUNTS)) {
+          taskUiError(`❌ [方案跳过] 【${profile.name}】文件不完整`);
+          continue;
+        }
+        const allTemplates = readTabularRows(CONFIG$1.FILES.TEMPLATE);
+        const templateRowCount = allTemplates.length;
+        for (let j = 0; j < dramaCount; j++) {
+          if (isCancelled) return;
+          const dramaInfo = await loadDramaData(j);
+          if (!dramaInfo) continue;
+          taskUiLog(
+            `
 🎬 [${profile.name}] 处理剧集 ${j + 1}/${dramaCount}: ${dramaInfo.targetDramaName}`
-        );
-        for (let i = 0; i < templateRowCount; i++) {
-          if (isCancelled) return;
-          const row = allTemplates[i];
-          const templateCopyright = String(row["版权"] || "").trim();
-          if (templateCopyright !== dramaInfo.copyright) continue;
-          const proConfigData = {
-            proConfig_email: String(row["邮箱"]).trim(),
-            proConfig_promotionLinkTemplateId: String(
-              row["推广链接模板ID"]
-            ).trim(),
-            proConfig_copyright: templateCopyright,
-            proConfig_strategyId: String(row["策略包ID"]).trim(),
-            proConfig_titlePackageId: String(row["标题组ID"]).trim(),
-            proConfig_subject: String(row["主体"]).trim()
-          };
-          const taskData = await generatePublishPayload(
-            dramaInfo,
-            proConfigData
           );
-          if (isCancelled) return;
-          if (taskData) {
-            globalTaskPool.push(taskData);
-            if (globalTaskPool.length >= BATCH_THRESHOLD) {
-              console.log(
-                `
+          for (let i = 0; i < templateRowCount; i++) {
+            if (isCancelled) return;
+            const row = allTemplates[i];
+            const templateCopyright = String(row["版权"] || "").trim();
+            if (templateCopyright !== dramaInfo.copyright) continue;
+            const proConfigData = {
+              proConfig_email: String(row["邮箱"]).trim(),
+              proConfig_promotionLinkTemplateId: String(
+                row["推广链接模板ID"]
+              ).trim(),
+              proConfig_copyright: templateCopyright,
+              // proConfig_strategyId: String(row["策略包ID"]).trim(),
+              // proConfig_titlePackageId: String(row["标题组ID"]).trim(),
+              proConfig_strategyId: String(row["策略包ID"] || "").trim(),
+              proConfig_titlePackageId: String(row["标题组ID"] || "").trim(),
+              proConfig_subject: String(row["主体"] || "").trim(),
+              proConfig_bid: row["出价"] ? String(row["出价"]).trim() : ""
+            };
+            const taskData = await generatePublishPayload(
+              dramaInfo,
+              proConfigData
+            );
+            if (isCancelled) return;
+            if (taskData) {
+              globalTaskPool.push(taskData);
+              if (globalTaskPool.length >= BATCH_THRESHOLD) {
+                taskUiLog(
+                  `
 📦 [蓄水池满] 已积攒 ${BATCH_THRESHOLD} 条，发起批量提交...`
-              );
-              await submitBatchTasks(globalTaskPool);
-              globalTaskPool = [];
-              const coolDown = 5e3 + Math.random() * 3e3;
-              console.log(
-                `❄️ [频率保护] 提交完毕，进入 ${Math.round(coolDown / 1e3)} 秒深度冷却...`
-              );
-              await new Promise((res) => setTimeout(res, coolDown));
-              if (isCancelled) return;
+                );
+                await submitBatchTasks(globalTaskPool);
+                globalTaskPool = [];
+                const coolDown = 5e3 + Math.random() * 3e3;
+                taskUiLog(
+                  `❄️ [频率保护] 提交完毕，进入 ${Math.round(coolDown / 1e3)} 秒深度冷却...`
+                );
+                await sleepWithThrottle(coolDown);
+                if (isCancelled) return;
+              }
             }
           }
+          await sleepWithThrottle(500);
+          if (isCancelled) return;
+          const authDataResult = await checkAuth(
+            CONFIG$1.KEY_CONFIG.userKey,
+            CONFIG$1.WORKING_CONFIG.account,
+            CONFIG$1.WORKING_CONFIG.password
+          );
+          if (authDataResult.status !== 1) throw new Error(authDataResult.msg);
         }
-        await new Promise((res) => setTimeout(res, 500));
-        if (isCancelled) return;
-        const authDataResult = await checkAuth(
-          CONFIG$1.KEY_CONFIG.userKey,
-          CONFIG$1.WORKING_CONFIG.account,
-          CONFIG$1.WORKING_CONFIG.password
-        );
-        if (authDataResult.status !== 1) throw new Error(authDataResult.msg);
-      }
-      console.log(`✅ 方案【${profile.name}】预处理完毕！`);
-      if (pIndex < CONFIG$1.SELECTED_PROFILES.length - 1) {
-        const profileCoolDown = 3e3 + Math.random() * 3e3;
-        console.log(`
+        taskUiLog(`✅ 方案【${profile.name}】预处理完毕！`);
+        if (pIndex < CONFIG$1.SELECTED_PROFILES.length - 1) {
+          const profileCoolDown = 1500 + Math.random() * 3e3;
+          taskUiLog(`
 ⏸️ [方案切换缓冲] 休息 ${Math.round(profileCoolDown / 1e3)} 秒，准备载入下一个方案...`);
-        await new Promise((res) => setTimeout(res, profileCoolDown));
-        if (isCancelled) return;
+          await sleepWithThrottle(profileCoolDown);
+          if (isCancelled) return;
+        }
       }
-    }
-    if (isCancelled) {
-      console.log("\n🚫 任务已被手动取消！");
-      return;
-    }
-    if (globalTaskPool.length > 0) {
-      console.log(
-        `
+      if (isCancelled) {
+        taskUiLog("\n🚫 任务已被手动取消！");
+        return;
+      }
+      if (globalTaskPool.length > 0) {
+        taskUiLog(
+          `
 📦 [收尾提交] 处理最后剩余的 ${globalTaskPool.length} 条任务...`
-      );
-      await submitBatchTasks(globalTaskPool);
+        );
+        await submitBatchTasks(globalTaskPool);
+      }
+      taskUiLog("\n🎉 所有选中的方案队列已全部执行结束");
+    } catch (e) {
+      taskUiError("❌ 程序核心逻辑运行异常:", e.message);
     }
-    console.log("\n🎉 所有选中的方案队列已全部执行结束");
   } catch (e) {
-    console.error("❌ 程序核心逻辑运行异常:", e.message);
+    taskUiError("❌ [程序异常]", e.message);
+    throw e;
+  } finally {
+    uiSender = null;
+    requestThrottleMultiplier = 1;
   }
 }
 function stopAutoTask() {
   isCancelled = true;
+  if (uiSender) {
+    uiSender.send("log-update", "⚠️ 正在取消任务，请稍候...");
+  }
 }
 const CONFIG = {
   KEY_CONFIG: { userKey: "" },
@@ -996,19 +1225,225 @@ const CONFIG = {
   SETTINGS: {
     ACCOUNT_MATCH_COUNT: 2,
     ACTION: "cancel"
-  }
+  },
+  /** 运行页「方案集」：{ id, name, profiles: string[] }[] */
+  profileSets: []
 };
 const getAppRootDir = () => {
   return electron.app.getPath("userData");
 };
-const DATA_ROOT = path$1.join(getAppRootDir(), "ZS_Assistant_Storage");
+const getAppInstanceId = () => {
+  const argv = process.argv || [];
+  const rawArg = argv.find((arg) => typeof arg === "string" && arg.startsWith("--instance=")) || (argv.includes("--instance") ? argv[argv.indexOf("--instance") + 1] : "");
+  const value = String(rawArg || "").replace("--instance=", "").trim().toLowerCase();
+  if (!value || value === "default" || value === "main" || value === "a") return "";
+  return value.replace(/[^a-z0-9_-]/g, "").slice(0, 32);
+};
+const APP_INSTANCE_ID = getAppInstanceId();
+const STORAGE_BASE_DIR = path$1.join(getAppRootDir(), "ZS_Assistant_Storage");
+const DATA_ROOT = APP_INSTANCE_ID ? path$1.join(STORAGE_BASE_DIR, `instance_${APP_INSTANCE_ID}`) : STORAGE_BASE_DIR;
 const PROFILES_DIR = path$1.join(DATA_ROOT, "profiles_records");
 const USER_DATA_PATH = path$1.join(DATA_ROOT, "zs_user_config.json");
 if (!fs$1.existsSync(DATA_ROOT)) fs$1.mkdirSync(DATA_ROOT, { recursive: true });
-if (!fs$1.existsSync(PROFILES_DIR))
-  fs$1.mkdirSync(PROFILES_DIR, { recursive: true });
+if (!fs$1.existsSync(PROFILES_DIR)) fs$1.mkdirSync(PROFILES_DIR, { recursive: true });
+const ALLOWED_INSTANCE_IDS = /* @__PURE__ */ new Set(["", "b"]);
+const INSTANCE_SLOT_NAME = APP_INSTANCE_ID || "default";
+const INSTANCE_LOCK_FILE = path$1.join(STORAGE_BASE_DIR, `.instance-${INSTANCE_SLOT_NAME}.lock`);
+let instanceLockFd = null;
+const isPidAlive = (pid) => {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+};
+const tryAcquireInstanceLock = () => {
+  if (!fs$1.existsSync(STORAGE_BASE_DIR)) {
+    fs$1.mkdirSync(STORAGE_BASE_DIR, { recursive: true });
+  }
+  if (fs$1.existsSync(INSTANCE_LOCK_FILE)) {
+    try {
+      const oldPid = parseInt(fs$1.readFileSync(INSTANCE_LOCK_FILE, "utf-8").trim(), 10);
+      if (isPidAlive(oldPid)) return false;
+      fs$1.unlinkSync(INSTANCE_LOCK_FILE);
+    } catch (_error) {
+      try {
+        fs$1.unlinkSync(INSTANCE_LOCK_FILE);
+      } catch (_innerError) {
+      }
+    }
+  }
+  try {
+    instanceLockFd = fs$1.openSync(INSTANCE_LOCK_FILE, "wx");
+    fs$1.writeFileSync(INSTANCE_LOCK_FILE, String(process.pid), "utf-8");
+    return true;
+  } catch (_error) {
+    return false;
+  }
+};
+const releaseInstanceLock = () => {
+  try {
+    if (instanceLockFd !== null) {
+      fs$1.closeSync(instanceLockFd);
+      instanceLockFd = null;
+    }
+  } catch (_error) {
+  }
+  try {
+    if (fs$1.existsSync(INSTANCE_LOCK_FILE)) {
+      fs$1.unlinkSync(INSTANCE_LOCK_FILE);
+    }
+  } catch (_error) {
+  }
+};
+electron.app.on("before-quit", () => {
+  releaseInstanceLock();
+});
 let userData = {};
 let globalUiSender = null;
+let autoFetchTimer = null;
+const tryCreateNormalizedTableSidecar = (targetPath) => {
+  try {
+    const ext = path$1.extname(targetPath).toLowerCase();
+    if (![".xlsx", ".xls", ".csv", ".json"].includes(ext)) return;
+    const sidecarPath = `${targetPath}.normalized.json`;
+    let rows = [];
+    let headers = [];
+    if (ext === ".json") {
+      const raw = fs$1.readFileSync(targetPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        rows = parsed;
+      } else if (Array.isArray(parsed?.rows)) {
+        rows = parsed.rows;
+      } else {
+        return;
+      }
+      headers = Array.isArray(parsed?.headers) ? parsed.headers : rows[0] ? Object.keys(rows[0]) : [];
+    } else {
+      const workbook = xlsx.readFile(targetPath);
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      headers = (xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || []).map((v) => String(v).trim());
+      rows = xlsx.utils.sheet_to_json(sheet, { defval: "", raw: false });
+    }
+    const payload = {
+      version: 1,
+      sourceFile: path$1.basename(targetPath),
+      generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      headers,
+      rows
+    };
+    fs$1.writeFileSync(sidecarPath, JSON.stringify(payload, null, 2), "utf-8");
+  } catch (error) {
+    console.warn(`⚠️ 生成标准化侧车文件失败: ${error.message}`);
+  }
+};
+const fetchGoodDramasLogic = async (params, sender = null) => {
+  isFetchCancelled = false;
+  try {
+    const authRes = await ensureAuth(
+      userData.WORKING_CONFIG?.account,
+      userData.WORKING_CONFIG?.password,
+      userData.session
+    );
+    if (!authRes.success) {
+      return { success: false, msg: authRes.msg };
+    }
+    if (authRes.session.time !== userData.session?.time) {
+      userData.session = authRes.session;
+      saveUserData();
+    }
+    const authHeaders = authRes.headers;
+    const today = getTodayString();
+    const { roiThreshold = 0.7, exportConfig, selectedProfiles, interval, startDay, endDay, ...restParams } = params || {};
+    const sDay = startDay || today;
+    const eDay = endDay || today;
+    let allDramas = [];
+    let currentPage = 1;
+    const MAX_PAGE_SIZE = 200;
+    let totalItems = 0;
+    const cleanParams = Object.fromEntries(
+      Object.entries(restParams).filter(([_, v]) => v !== null && v !== void 0)
+    );
+    do {
+      if (isFetchCancelled) {
+        console.log("🛑 收到中止指令，停止翻页");
+        return { success: false, msg: "CANCELLED" };
+      }
+      const queryObj = {
+        bookInfo: "",
+        promotionInfo: "",
+        advertiserInfo: "",
+        cdpProjectInfo: "",
+        cdpPromotionInfo: "",
+        bidType: "NO_BID",
+        linkType: "IAP",
+        copyrightType: "分销",
+        carrier: "link",
+        startDay: sDay,
+        // 🌟 核心修改 3：使用传入的开始日期
+        endDay: eDay,
+        // 🌟 核心修改 4：使用传入的结束日期
+        "sortingFields[0].field": "statCost",
+        "sortingFields[0].order": "desc",
+        pageNo: currentPage,
+        pageSize: MAX_PAGE_SIZE,
+        ...cleanParams
+      };
+      const searchParams = new URLSearchParams(queryObj).toString();
+      const url = `https://api.iocpx.com/adv-report-query/promotionDay/getLatestCostByDay?${searchParams}`;
+      console.log(`[抓取中] 日期:${sDay} 至 ${eDay} | 第 ${currentPage} 页...`);
+      const response = await axios.get(url, {
+        headers: authHeaders,
+        timeout: 2e4
+      });
+      const list = response.data?.data?.list || [];
+      totalItems = response.data?.data?.total || 0;
+      allDramas.push(...list);
+      if (sender) {
+        sender.send("fetch-log-update", {
+          type: "progress",
+          dateRange: `${sDay} 至 ${eDay}`,
+          count: allDramas.length,
+          total: totalItems
+        });
+      }
+      if (allDramas.length >= totalItems || list.length === 0) break;
+      currentPage++;
+      await sleep(1e3);
+    } while (true);
+    console.log(`✅ 抓取结束。总条数: ${allDramas.length}`);
+    const currentTime = (/* @__PURE__ */ new Date()).toLocaleTimeString();
+    const filteredGoodList = allDramas.filter((item) => item.attributionBillingGameInAppRoi1day > roiThreshold).map((item) => ({
+      bookName: item.bookName,
+      roi: item.attributionBillingGameInAppRoi1day,
+      cost: item.statCost || 0,
+      fetchTime: currentTime
+    }));
+    return { success: true, data: filteredGoodList, totalProcessed: allDramas.length };
+  } catch (error) {
+    console.error("抓取异常:", error.message);
+    return { success: false, msg: error.message };
+  }
+};
+function migrateWorkingConfigAccountKey() {
+  const w = userData.WORKING_CONFIG;
+  if (!w || typeof w !== "object") return false;
+  let changed = false;
+  const acc = String(w.account ?? "").trim();
+  const legacy = String(w.acount ?? "").trim();
+  if (!acc && legacy) {
+    w.account = legacy;
+    changed = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(w, "acount")) {
+    delete w.acount;
+    changed = true;
+  }
+  return changed;
+}
 function loadUserData() {
   if (fs$1.existsSync(USER_DATA_PATH)) {
     try {
@@ -1023,6 +1458,9 @@ function loadUserData() {
     userData = JSON.parse(JSON.stringify(CONFIG));
     saveUserData();
   }
+  if (migrateWorkingConfigAccountKey()) {
+    saveUserData();
+  }
 }
 function saveUserData() {
   try {
@@ -1032,12 +1470,21 @@ function saveUserData() {
     console.error("❌ 配置文件保存失败:", e);
   }
 }
+function buildInitSettingsPayload(isUpdated = false) {
+  return {
+    ...userData,
+    appVersion: electron.app.getVersion(),
+    instanceId: APP_INSTANCE_ID,
+    isUpdated
+  };
+}
 function createWindow() {
+  const instanceTag = APP_INSTANCE_ID ? ` [${APP_INSTANCE_ID}]` : "";
   const mainWindow = new electron.BrowserWindow({
     width: 1050,
     height: 750,
     show: false,
-    title: `漫剧神器 v${electron.app.getVersion()}`,
+    title: `漫剧神器${instanceTag} v${electron.app.getVersion()}`,
     autoHideMenuBar: true,
     ...process.platform === "linux" ? { icon: path$1.join(__dirname, "../../build/icon.png") } : {},
     webPreferences: {
@@ -1056,10 +1503,7 @@ function createWindow() {
       saveUserData();
     }
     mainWindow.webContents.send("init-settings", {
-      ...userData,
-      appVersion: electron.app.getVersion(),
-      isUpdated: isFirstRunAfterUpdate
-      // 把“是否刚更新”的标记发给前端
+      ...buildInitSettingsPayload(isFirstRunAfterUpdate)
     });
   });
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -1073,8 +1517,24 @@ function createWindow() {
   }
 }
 electron.app.whenReady().then(() => {
+  if (!ALLOWED_INSTANCE_IDS.has(APP_INSTANCE_ID)) {
+    electron.dialog.showErrorBox(
+      "实例启动受限",
+      "当前版本仅允许双开：默认实例和 b 实例。\n请使用默认启动，或使用参数 --instance=b。"
+    );
+    electron.app.quit();
+    return;
+  }
+  if (!tryAcquireInstanceLock()) {
+    electron.dialog.showErrorBox(
+      "实例已在运行",
+      `实例 [${INSTANCE_SLOT_NAME}] 已经启动，当前版本最多只能双开（default + b）。`
+    );
+    electron.app.quit();
+    return;
+  }
   loadUserData();
-  utils.electronApp.setAppUserModelId("com.electron");
+  utils.electronApp.setAppUserModelId(APP_INSTANCE_ID ? `com.electron.${APP_INSTANCE_ID}` : "com.electron");
   electron.app.on("browser-window-created", (_, window) => {
     utils.optimizer.watchWindowShortcuts(window);
   });
@@ -1086,73 +1546,276 @@ electron.app.whenReady().then(() => {
       globalUiSender.send("update-message", payload);
     } else {
       const windows = electron.BrowserWindow.getAllWindows();
-      if (windows.length > 0)
-        windows[0].webContents.send("update-message", payload);
+      if (windows.length > 0) windows[0].webContents.send("update-message", payload);
     }
   };
-  electronUpdater.autoUpdater.on("checking-for-update", () => {
-    console.log("🔄 正在检查更新...");
-  });
+  electronUpdater.autoUpdater.on("checking-for-update", () => console.log("🔄 正在检查更新..."));
   electronUpdater.autoUpdater.on("update-available", (info) => {
-    console.log(`✨ 发现新版本: v${info.version}`);
-    sendUpdateMessage({
-      type: "available",
-      version: info.version,
-      msg: `发现新版本 v${info.version}，是否立即在后台下载？`
-    });
+    sendUpdateMessage({ type: "available", version: info.version, msg: `发现新版本 v${info.version}` });
   });
   electronUpdater.autoUpdater.on("update-not-available", () => {
     sendUpdateMessage({ type: "latest", msg: "当前已经是最新版本！" });
   });
   electronUpdater.autoUpdater.on("download-progress", (progressObj) => {
-    sendUpdateMessage({
-      type: "downloading",
-      percent: Math.round(progressObj.percent)
-    });
+    sendUpdateMessage({ type: "downloading", percent: Math.round(progressObj.percent) });
   });
   electronUpdater.autoUpdater.on("update-downloaded", () => {
-    sendUpdateMessage({
-      type: "downloaded",
-      msg: "🚀 新版本下载完成，是否立即重启以完成安装？"
-    });
+    sendUpdateMessage({ type: "downloaded", msg: "🚀 新版本下载完成" });
   });
-  electronUpdater.autoUpdater.on("error", (err) => {
+  electronUpdater.autoUpdater.on("error", () => {
     sendUpdateMessage({ type: "error", msg: `更新失败` });
   });
   electron.ipcMain.on("check-for-updates", (event) => {
     globalUiSender = event.sender;
     electronUpdater.autoUpdater.checkForUpdates();
   });
-  electron.ipcMain.on("confirm-download", () => {
-    electronUpdater.autoUpdater.downloadUpdate();
+  electron.ipcMain.on("confirm-download", () => electronUpdater.autoUpdater.downloadUpdate());
+  electron.ipcMain.on("confirm-install", () => electronUpdater.autoUpdater.quitAndInstall());
+  electron.ipcMain.handle("fetch-good-dramas", async (event, params) => {
+    return await fetchGoodDramasLogic(params, event.sender);
   });
-  electron.ipcMain.on("confirm-install", () => {
-    electronUpdater.autoUpdater.quitAndInstall();
+  electron.ipcMain.on("start-auto-fetch", async (event, config) => {
+    globalUiSender = event.sender;
+    if (autoFetchTimer) clearInterval(autoFetchTimer);
+    const intervalMs = config.interval * 60 * 1e3;
+    const todayStr = getTodayString();
+    const userKey = userData.KEY_CONFIG?.userKey || "";
+    let initialCloudList = [];
+    if (userKey) {
+      try {
+        const getUrl = `${BASE_SERVER_URL}/api/daily-record/get?license_key=${userKey.trim()}&date=${todayStr}`;
+        const cloudRes = await axios.get(getUrl, { timeout: 4e3 });
+        if (cloudRes.data?.status === "ok" && cloudRes.data?.data?.list) {
+          initialCloudList = cloudRes.data.data.list;
+        }
+      } catch (e) {
+        console.log("启动时拉取云端记录超时，使用本地缓存");
+      }
+    }
+    if (!userData.dailyPublished || userData.dailyPublished.date !== todayStr || !Array.isArray(userData.dailyPublished.list)) {
+      userData.dailyPublished = { date: todayStr, list: [] };
+    }
+    const initialMergedSet = /* @__PURE__ */ new Set([...userData.dailyPublished.list, ...initialCloudList]);
+    const initialMergedArray = Array.from(initialMergedSet);
+    if (initialMergedArray.length > 0) {
+      event.sender.send("fetch-log-update", {
+        type: "success",
+        msg: `📝 [防重记录] 今日全网已发剧集 (${initialMergedArray.length}部): ${initialMergedArray.join("、")}`
+      });
+    } else {
+      event.sender.send("fetch-log-update", {
+        type: "success",
+        msg: `📝 [防重记录] 经核对，今日全网暂无上剧记录，配额充足！`
+      });
+    }
+    const executeRoutine = async () => {
+      try {
+        event.sender.send("fetch-log-update", { type: "success", msg: `[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] 正在按条件执行后台自动巡航...` });
+        const res = await fetchGoodDramasLogic(config);
+        if (res.success && res.data.length > 0) {
+          let cloudList = [];
+          if (userKey) {
+            try {
+              const getUrl = `${BASE_SERVER_URL}/api/daily-record/get?license_key=${userKey.trim()}&date=${todayStr}`;
+              const cloudRes = await axios.get(getUrl, { timeout: 4e3 });
+              if (cloudRes.data?.status === "ok" && cloudRes.data?.data?.list) {
+                cloudList = cloudRes.data.data.list;
+              }
+            } catch (e) {
+              console.log("⚠️ 云端拉取超时，降级为本地校验...", e.message);
+            }
+          }
+          if (!userData.dailyPublished || userData.dailyPublished.date !== todayStr || !Array.isArray(userData.dailyPublished.list)) {
+            userData.dailyPublished = { date: todayStr, list: [] };
+          }
+          const localList = userData.dailyPublished.list;
+          const mergedPublishedSet = /* @__PURE__ */ new Set([...localList, ...cloudList]);
+          const newDramas = res.data.filter((item) => !mergedPublishedSet.has(item.bookName));
+          if (newDramas.length === 0) {
+            event.sender.send("fetch-log-update", {
+              type: "success",
+              msg: `[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] 发现 ${res.data.length} 个爆款，经云端核对今日均已分发，防重机制触发，跳过上剧。`
+            });
+            return;
+          }
+          newDramas.forEach((item) => userData.dailyPublished.list.push(item.bookName));
+          saveUserData();
+          if (userKey) {
+            try {
+              const fullListToUpload = Array.from(/* @__PURE__ */ new Set([...userData.dailyPublished.list]));
+              await axios.post(`${BASE_SERVER_URL}/api/daily-record/save`, {
+                license_key: userKey.trim(),
+                date: todayStr,
+                list: fullListToUpload
+              }, { timeout: 4e3 });
+            } catch (e) {
+              console.log("⚠️ 上传云端失败，但本地已保存。", e.message);
+            }
+          }
+          event.sender.send("fetch-log-update", { type: "data", list: newDramas });
+          const globalAssetsDir = path$1.join(PROFILES_DIR, "global_assets");
+          if (!fs$1.existsSync(globalAssetsDir)) fs$1.mkdirSync(globalAssetsDir, { recursive: true });
+          const excelName = `Auto_Dramas_${Date.now()}.xlsx`;
+          const excelPath = path$1.join(globalAssetsDir, excelName);
+          const exportConf = config.exportConfig || { copyright: "ZZ番茄", materialCount: 30 };
+          const headers = ["版权", "产品ID", "产品名称", "素材名称", "素材个数", "指定素材", "新建项目数", "新建广告数", "素材文件名称"];
+          const rows = [headers];
+          newDramas.forEach((item) => {
+            rows.push([
+              exportConf.copyright,
+              "",
+              item.bookName,
+              "",
+              exportConf.materialCount,
+              "",
+              1,
+              1,
+              ""
+            ]);
+          });
+          const ws = xlsx.utils.aoa_to_sheet(rows);
+          ws["!cols"] = [
+            { wch: 12 },
+            { wch: 12 },
+            { wch: 35 },
+            { wch: 15 },
+            { wch: 10 },
+            { wch: 15 },
+            { wch: 12 },
+            { wch: 12 },
+            { wch: 20 }
+          ];
+          const wb = xlsx.utils.book_new();
+          xlsx.utils.book_append_sheet(wb, ws, "Sheet1");
+          xlsx.writeFile(wb, excelPath);
+          event.sender.send("fetch-log-update", { type: "success", msg: `剔除今日已上剧集后，将为您自动分发 ${newDramas.length} 部新爆款...` });
+          const RUNTIME_CONFIG = JSON.parse(JSON.stringify(CONFIG));
+          RUNTIME_CONFIG.KEY_CONFIG.userKey = userData.KEY_CONFIG?.userKey || "";
+          RUNTIME_CONFIG.WORKING_CONFIG = userData.WORKING_CONFIG || {};
+          RUNTIME_CONFIG.FILES.DRAMA_LIST = excelPath;
+          RUNTIME_CONFIG.session = userData.session;
+          const chosenProfiles = config.selectedProfiles || [];
+          RUNTIME_CONFIG.SELECTED_PROFILES = Object.keys(userData.profiles || {}).filter((profileName) => chosenProfiles.includes(profileName)).map((profileName) => {
+            const profileFolder = path$1.join(PROFILES_DIR, profileName);
+            const pData = userData.profiles[profileName];
+            return {
+              name: profileName,
+              businessType: pData.businessType,
+              TEMPLATE: path$1.join(profileFolder, pData.files.TEMPLATE),
+              ACCOUNTS: path$1.join(profileFolder, pData.files.ACCOUNTS)
+            };
+          });
+          RUNTIME_CONFIG.SETTINGS.ACTION = "publish";
+          event.sender.send("task-status-change", true);
+          await runAutoTask(event.sender, RUNTIME_CONFIG);
+          event.sender.send("fetch-log-update", { type: "success", msg: `🎉 本轮爆款跟进任务执行完毕！` });
+        } else if (res.success && res.data.length === 0) {
+          event.sender.send("fetch-log-update", { type: "success", msg: `[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] 本次巡航未发现 ROI > ${config.roiThreshold || 0.7} 的爆款` });
+        } else if (res.msg !== "CANCELLED") {
+          event.sender.send("fetch-log-update", { type: "error", msg: "后台巡航抓取失败: " + res.msg });
+        }
+      } catch (fatalError) {
+        console.error("❌ 巡航逻辑发生致命崩溃:", fatalError);
+        event.sender.send("fetch-log-update", { type: "error", msg: `引擎崩溃: ${fatalError.message}` });
+        event.sender.send("task-status-change", false);
+      }
+    };
+    executeRoutine();
+    autoFetchTimer = setInterval(executeRoutine, intervalMs);
+    event.sender.send("fetch-log-update", { type: "status", isRunning: true });
+  });
+  electron.ipcMain.on("stop-auto-fetch", (event) => {
+    if (autoFetchTimer) {
+      clearInterval(autoFetchTimer);
+      autoFetchTimer = null;
+    }
+    stopAutoTask();
+    isFetchCancelled = true;
+    event.sender.send("fetch-log-update", { type: "status", isRunning: false });
+    event.sender.send("fetch-log-update", {
+      type: "success",
+      msg: "🛑 已向后台发送停止指令，所有抓取和上剧任务将被中止！"
+    });
   });
   electron.ipcMain.handle("dialog:openFile", async () => {
     const { canceled, filePaths } = await electron.dialog.showOpenDialog({
       properties: ["openFile"],
-      filters: [{ name: "Excel Files", extensions: ["xlsx", "xls"] }]
+      filters: [
+        { name: "表格或配置文件", extensions: ["xlsx", "xls", "csv", "json"] },
+        { name: "Excel Files", extensions: ["xlsx", "xls"] },
+        { name: "CSV Files", extensions: ["csv"] },
+        { name: "JSON Files", extensions: ["json"] }
+      ]
     });
     return canceled ? null : filePaths[0];
   });
-  electron.ipcMain.handle(
-    "import-profile-file",
-    async (event, { profileName, sourcePath }) => {
-      try {
-        if (!profileName) throw new Error("请先输入或选择方案名称");
-        const targetFolder = path$1.join(PROFILES_DIR, profileName);
-        if (!fs$1.existsSync(targetFolder))
-          fs$1.mkdirSync(targetFolder, { recursive: true });
-        const fileName = path$1.basename(sourcePath);
-        const targetPath = path$1.join(targetFolder, fileName);
-        fs$1.copyFileSync(sourcePath, targetPath);
-        return { success: true, fileName };
-      } catch (err) {
-        return { success: false, msg: err.message };
+  electron.ipcMain.handle("dialog:openExcelFile", async () => {
+    const { canceled, filePaths } = await electron.dialog.showOpenDialog({
+      properties: ["openFile"],
+      filters: [{ name: "Excel", extensions: ["xlsx", "xls"] }]
+    });
+    return canceled ? null : filePaths[0];
+  });
+  electron.ipcMain.handle("batch-remove-accounts-from-profiles", async (_event, { accounts }) => {
+    try {
+      const targetSet = new Set(
+        (accounts || []).map((a) => String(a).trim()).filter(Boolean)
+      );
+      if (!targetSet.size) return { success: false, msg: "账号列表为空" };
+      const results = [];
+      for (const [profileName, pData] of Object.entries(userData.profiles || {})) {
+        const accountsFile = pData?.files?.ACCOUNTS;
+        if (!accountsFile) {
+          results.push({ profileName, deletedCount: 0, skipped: "未配置账号列表" });
+          continue;
+        }
+        const filePath = path$1.join(PROFILES_DIR, profileName, accountsFile);
+        if (!fs$1.existsSync(filePath)) {
+          results.push({ profileName, deletedCount: 0, skipped: "文件不存在" });
+          continue;
+        }
+        const workbook = xlsx.readFile(filePath);
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const headerRow = xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || [];
+        const headers = headerRow.map((v) => String(v).trim());
+        const rows = xlsx.utils.sheet_to_json(sheet, { defval: "", raw: false });
+        const before = rows.length;
+        const kept = rows.filter(
+          (row) => !targetSet.has(String(row["账号"] || "").trim())
+        );
+        const deletedCount = before - kept.length;
+        if (deletedCount > 0) {
+          const newSheet = xlsx.utils.json_to_sheet(
+            kept,
+            headers.length ? { header: headers } : void 0
+          );
+          workbook.Sheets[sheetName] = newSheet;
+          xlsx.writeFile(workbook, filePath);
+          tryCreateNormalizedTableSidecar(filePath);
+        }
+        results.push({ profileName, deletedCount });
       }
+      clearAccountsCache();
+      return { success: true, results };
+    } catch (error) {
+      return { success: false, msg: error.message };
     }
-  );
+  });
+  electron.ipcMain.handle("import-profile-file", async (event, { profileName, sourcePath }) => {
+    try {
+      if (!profileName) throw new Error("请先输入或选择方案名称");
+      const targetFolder = path$1.join(PROFILES_DIR, profileName);
+      if (!fs$1.existsSync(targetFolder)) fs$1.mkdirSync(targetFolder, { recursive: true });
+      const fileName = path$1.basename(sourcePath);
+      const targetPath = path$1.join(targetFolder, fileName);
+      fs$1.copyFileSync(sourcePath, targetPath);
+      tryCreateNormalizedTableSidecar(targetPath);
+      return { success: true, fileName };
+    } catch (err) {
+      return { success: false, msg: err.message };
+    }
+  });
   electron.ipcMain.on("open-profile-folder", (event, profileName) => {
     const folderPath = profileName ? path$1.join(PROFILES_DIR, profileName) : PROFILES_DIR;
     electron.shell.openPath(fs$1.existsSync(folderPath) ? folderPath : PROFILES_DIR);
@@ -1164,6 +1827,26 @@ electron.app.whenReady().then(() => {
       if (fs$1.existsSync(targetDir)) {
         await fs$1.promises.rm(targetDir, { recursive: true, force: true });
       }
+      return { success: true };
+    } catch (error) {
+      return { success: false, msg: error.message };
+    }
+  });
+  electron.ipcMain.handle("rename-profile-folder", async (_event, payload) => {
+    try {
+      const oldName = typeof payload?.oldName === "string" ? payload.oldName.trim() : "";
+      const newName = typeof payload?.newName === "string" ? payload.newName.trim() : "";
+      if (!oldName || !newName) return { success: false, msg: "方案名不能为空" };
+      if (oldName === newName) return { success: true };
+      const oldDir = path$1.join(PROFILES_DIR, oldName);
+      const newDir = path$1.join(PROFILES_DIR, newName);
+      if (fs$1.existsSync(newDir)) {
+        return { success: false, msg: `目标方案目录已存在: ${newName}` };
+      }
+      if (!fs$1.existsSync(oldDir)) {
+        return { success: true };
+      }
+      await fs$1.promises.rename(oldDir, newDir);
       return { success: true };
     } catch (error) {
       return { success: false, msg: error.message };
@@ -1182,15 +1865,20 @@ electron.app.whenReady().then(() => {
       return { success: false, msg: err.message };
     }
   });
-  electron.ipcMain.on("update-profiles", (event, profiles) => {
-    userData.profiles = profiles;
+  electron.ipcMain.on("update-profiles", (event, payload) => {
+    if (payload && typeof payload === "object" && payload.profiles) {
+      userData.profiles = payload.profiles;
+      userData.profileOrder = Array.isArray(payload.profileOrder) ? payload.profileOrder : Object.keys(payload.profiles || {});
+    } else {
+      userData.profiles = payload || {};
+      userData.profileOrder = Object.keys(userData.profiles || {});
+    }
     saveUserData();
   });
   electron.ipcMain.on("save-settings-only", (event, flatData) => {
     userData.KEY_CONFIG.userKey = flatData.userKey;
     userData.WORKING_CONFIG = {
       account: flatData.workingAccount,
-      // 已修正拼写
       password: flatData.workingPassword
     };
     userData.FILES = {
@@ -1204,22 +1892,33 @@ electron.app.whenReady().then(() => {
     };
     if (!userData.SETTINGS) userData.SETTINGS = {};
     userData.SETTINGS.ACCOUNT_MATCH_COUNT = flatData.accountMatchCount;
+    if (Array.isArray(flatData.profileSets)) {
+      userData.profileSets = flatData.profileSets;
+    }
     saveUserData();
   });
   electron.ipcMain.on("save-session-persistent", (event, sessionData) => {
     userData.session = sessionData;
     saveUserData();
   });
-  electron.ipcMain.on("stop-task", (event) => {
-    console.log("📥 主进程：接收到前端取消指令");
+  electron.ipcMain.on("stop-task", () => {
     stopAutoTask();
-    if (globalUiSender) {
-      globalUiSender.send("log-update", "⚠️ 正在取消任务，请稍候...");
-    }
   });
   electron.ipcMain.on("run-task", async (event, uiConfig) => {
     globalUiSender = event.sender;
-    userData.lastConfig = uiConfig;
+    const rawSelected = Array.isArray(uiConfig.selectedProfiles) ? uiConfig.selectedProfiles : [];
+    const validProfileNames = rawSelected.filter((n) => userData.profiles?.[n]);
+    if (validProfileNames.length === 0) {
+      if (rawSelected.length > 0) {
+        event.sender.send(
+          "log-update",
+          `<span style="color:red;">❌ 所选方案已不存在或已删除，请重新选择后启动。</span>`
+        );
+      }
+      return;
+    }
+    const uiConfigSafe = { ...uiConfig, selectedProfiles: validProfileNames };
+    userData.lastConfig = uiConfigSafe;
     saveUserData();
     const RUNTIME_CONFIG = JSON.parse(JSON.stringify(CONFIG));
     RUNTIME_CONFIG.KEY_CONFIG.userKey = uiConfig.userKey;
@@ -1227,75 +1926,65 @@ electron.app.whenReady().then(() => {
       account: uiConfig.workingAccount,
       password: uiConfig.workingPassword
     };
-    RUNTIME_CONFIG.FILES.DRAMA_LIST = path$1.join(
-      PROFILES_DIR,
-      "global_assets",
-      uiConfig.globalDramaList
-    );
-    RUNTIME_CONFIG.SELECTED_PROFILES = uiConfig.selectedProfiles.map(
-      (profileName) => {
-        const profileFolder = path$1.join(PROFILES_DIR, profileName);
-        const pData = userData.profiles[profileName];
-        return {
-          name: profileName,
-          businessType: pData.businessType,
-          TEMPLATE: path$1.join(profileFolder, pData.files.TEMPLATE),
-          ACCOUNTS: path$1.join(profileFolder, pData.files.ACCOUNTS)
-        };
-      }
-    );
+    RUNTIME_CONFIG.FILES.DRAMA_LIST = path$1.join(PROFILES_DIR, "global_assets", uiConfig.globalDramaList);
+    RUNTIME_CONFIG.SELECTED_PROFILES = validProfileNames.map((profileName) => {
+      const profileFolder = path$1.join(PROFILES_DIR, profileName);
+      const pData = userData.profiles[profileName];
+      return {
+        name: profileName,
+        businessType: pData.businessType,
+        enableCustomAccountMatchCount: pData.enableCustomAccountMatchCount === true,
+        accountMatchCount: pData.accountMatchCount ?? null,
+        TEMPLATE: path$1.join(profileFolder, pData.files.TEMPLATE),
+        ACCOUNTS: path$1.join(profileFolder, pData.files.ACCOUNTS)
+      };
+    });
     RUNTIME_CONFIG.FILES.PAGE_NUM = uiConfig.pageNum ?? 1;
     RUNTIME_CONFIG.FILES.PROJECT_NUM = uiConfig.projectNum ?? 1;
     RUNTIME_CONFIG.FILES.ADS_NUM = uiConfig.adsNum ?? 1;
     RUNTIME_CONFIG.FILES.isAccountFlat = uiConfig.isAccountFlat ?? false;
     RUNTIME_CONFIG.FILES.dateRange = uiConfig.dateRange || "";
     RUNTIME_CONFIG.SETTINGS.ACTION = uiConfig.action;
+    RUNTIME_CONFIG.SETTINGS.RANKING_TYPE = uiConfig.rankingType || "material";
     if (!RUNTIME_CONFIG.SETTINGS) RUNTIME_CONFIG.SETTINGS = {};
     RUNTIME_CONFIG.SETTINGS.ACCOUNT_MATCH_COUNT = uiConfig.accountMatchCount ?? 2;
+    RUNTIME_CONFIG.SETTINGS.REQUEST_THROTTLE_MULTIPLIER = APP_INSTANCE_ID === "b" ? 3 : 1;
+    RUNTIME_CONFIG.SETTINGS.BATCH_THRESHOLD = 50;
     RUNTIME_CONFIG.session = userData.session;
     try {
       event.sender.send("task-status-change", true);
       await runAutoTask(event.sender, RUNTIME_CONFIG);
-      event.sender.send(
-        "log-update",
-        "🎉 [系统] 队列内所有方案自动化流程执行完毕。"
-      );
     } catch (err) {
-      event.sender.send("log-update", `❌ [程序异常] ${err.message}`);
+      console.error("[run-task]", err);
     } finally {
       event.sender.send("task-status-change", false);
     }
   });
   electron.ipcMain.handle(
     "cloud:save-profiles",
-    async (event, { userKey, profiles }) => {
+    async (event, { userKey, profiles, profileSets }) => {
       try {
+        const setsForZip = Array.isArray(profileSets) ? profileSets : Array.isArray(userData.profileSets) ? userData.profileSets : [];
+        if (Array.isArray(profileSets)) {
+          userData.profileSets = profileSets;
+          saveUserData();
+        }
         const zip = new AdmZip();
-        if (fs$1.existsSync(PROFILES_DIR))
-          zip.addLocalFolder(PROFILES_DIR, "profiles_records");
-        zip.addFile(
-          "profiles_config.json",
-          Buffer.from(JSON.stringify(profiles), "utf8")
-        );
+        if (fs$1.existsSync(PROFILES_DIR)) zip.addLocalFolder(PROFILES_DIR, "profiles_records");
+        zip.addFile("profiles_config.json", Buffer.from(JSON.stringify(profiles), "utf8"));
+        zip.addFile("profile_sets.json", Buffer.from(JSON.stringify(setsForZip), "utf8"));
         const zipBuffer = zip.toBuffer();
         const form = new FormData();
         form.append("license_key", userKey);
-        form.append("backup_file", zipBuffer, {
-          filename: `backup_${userKey}.zip`,
-          contentType: "application/zip"
-        });
+        form.append("backup_file", zipBuffer, { filename: `backup_${userKey}.zip`, contentType: "application/zip" });
         const headers = form.getHeaders();
         headers["Content-Length"] = form.getLengthSync();
-        const response = await axios.post(
-          "http://129.204.86.63:3535/api/profiles/save",
-          form,
-          {
-            headers,
-            timeout: 6e4,
-            maxBodyLength: Infinity,
-            maxContentLength: Infinity
-          }
-        );
+        const response = await axios.post("http://129.204.86.63:3535/api/profiles/save", form, {
+          headers,
+          timeout: 6e4,
+          maxBodyLength: Infinity,
+          maxContentLength: Infinity
+        });
         return response.data;
       } catch (error) {
         const serverDetail = error.response?.data?.msg || error.message;
@@ -1305,13 +1994,10 @@ electron.app.whenReady().then(() => {
   );
   electron.ipcMain.handle("cloud:get-profiles", async (event, userKey) => {
     try {
-      const response = await axios.get(
-        `http://129.204.86.63:3535/api/profiles/get?license_key=${userKey}`,
-        {
-          responseType: "arraybuffer",
-          timeout: 6e4
-        }
-      );
+      const response = await axios.get(`http://129.204.86.63:3535/api/profiles/get?license_key=${userKey}`, {
+        responseType: "arraybuffer",
+        timeout: 6e4
+      });
       const contentType = response.headers["content-type"];
       if (contentType && contentType.includes("application/json")) {
         return JSON.parse(Buffer.from(response.data).toString("utf8"));
@@ -1320,13 +2006,8 @@ electron.app.whenReady().then(() => {
       zip.extractAllTo(DATA_ROOT, true);
       const oldDirPath = path$1.join(DATA_ROOT, "profiles_data");
       if (fs$1.existsSync(oldDirPath) && oldDirPath !== PROFILES_DIR) {
-        if (fs$1.existsSync(PROFILES_DIR)) {
-          fs$1.rmSync(PROFILES_DIR, { recursive: true, force: true });
-        }
+        if (fs$1.existsSync(PROFILES_DIR)) fs$1.rmSync(PROFILES_DIR, { recursive: true, force: true });
         fs$1.renameSync(oldDirPath, PROFILES_DIR);
-        console.log(
-          "🚚 已自动将云端旧目录 profiles_data 更名为 profiles_records"
-        );
       }
       const configPath = path$1.join(DATA_ROOT, "profiles_config.json");
       let profilesData = {};
@@ -1336,18 +2017,93 @@ electron.app.whenReady().then(() => {
         saveUserData();
         fs$1.unlinkSync(configPath);
       }
-      return { status: "ok", data: profilesData };
+      const profileSetsPath = path$1.join(DATA_ROOT, "profile_sets.json");
+      let restoredProfileSets = null;
+      if (fs$1.existsSync(profileSetsPath)) {
+        try {
+          const parsedSets = JSON.parse(fs$1.readFileSync(profileSetsPath, "utf-8"));
+          if (Array.isArray(parsedSets)) {
+            userData.profileSets = parsedSets;
+            restoredProfileSets = parsedSets;
+            saveUserData();
+          }
+        } catch (_) {
+        }
+        try {
+          fs$1.unlinkSync(profileSetsPath);
+        } catch (_) {
+        }
+      }
+      return {
+        status: "ok",
+        data: profilesData,
+        profileSetsUpdatedFromBackup: restoredProfileSets !== null,
+        profileSets: Array.isArray(userData.profileSets) ? userData.profileSets : []
+      };
     } catch (error) {
-      console.error("云端恢复失败:", error);
       return { status: "error", msg: "下载失败: " + error.message };
     }
   });
+  const normalizeRemoteProfileSets = (body) => {
+    if (body == null) return null;
+    if (Array.isArray(body)) return body;
+    if (typeof body !== "object") return null;
+    if (Array.isArray(body.profileSets)) return body.profileSets;
+    if (Array.isArray(body.data)) return body.data;
+    if (body.data && typeof body.data === "object" && Array.isArray(body.data.profileSets)) {
+      return body.data.profileSets;
+    }
+    return null;
+  };
+  electron.ipcMain.handle("profile-sets:save-remote", async (_event, { account, profileSets }) => {
+    const acc = typeof account === "string" ? account.trim() : "";
+    if (!acc) return { status: "error", msg: "账号为空" };
+    if (!Array.isArray(profileSets)) return { status: "error", msg: "方案集数据无效" };
+    try {
+      const response = await axios.post(
+        "http://129.204.86.63:3535/api/profile-sets/save",
+        { account: acc, profileSets },
+        { headers: { "Content-Type": "application/json" }, timeout: 3e4 }
+      );
+      const data = response.data;
+      if (data && typeof data === "object" && data.status === "error") {
+        return { status: "error", msg: data.msg || data.message || "保存失败" };
+      }
+      return { status: "ok", ...typeof data === "object" && data ? data : {} };
+    } catch (error) {
+      const detail = error.response?.data?.msg || error.response?.data?.message || error.message;
+      return { status: "error", msg: "保存失败: " + detail };
+    }
+  });
+  electron.ipcMain.handle("profile-sets:get-remote", async (_event, account) => {
+    const acc = typeof account === "string" ? account.trim() : "";
+    if (!acc) return { status: "error", msg: "账号为空" };
+    try {
+      const response = await axios.get("http://129.204.86.63:3535/api/profile-sets/get", {
+        params: { account: acc },
+        timeout: 3e4
+      });
+      const body = response.data;
+      if (body && typeof body === "object" && body.status === "error") {
+        return { status: "error", msg: body.msg || body.message || "获取失败" };
+      }
+      const list = normalizeRemoteProfileSets(body);
+      if (!Array.isArray(list)) {
+        return { status: "error", msg: "服务器返回的方案集格式无法识别" };
+      }
+      return { status: "ok", profileSets: list };
+    } catch (error) {
+      const detail = error.response?.data?.msg || error.response?.data?.message || error.message;
+      return { status: "error", msg: "获取失败: " + detail };
+    }
+  });
   electron.ipcMain.handle("dialog:showMessage", async (event, options) => {
-    const result = await electron.dialog.showMessageBox(
-      electron.BrowserWindow.fromWebContents(event.sender),
-      options
-    );
+    const result = await electron.dialog.showMessageBox(electron.BrowserWindow.fromWebContents(event.sender), options);
     return result.response;
+  });
+  electron.ipcMain.handle("settings:reload-current-instance", async () => {
+    loadUserData();
+    return buildInitSettingsPayload(false);
   });
   electron.ipcMain.handle("download-drama-template", async (event) => {
     try {
@@ -1357,50 +2113,27 @@ electron.app.whenReady().then(() => {
       const { canceled, filePath } = await electron.dialog.showSaveDialog(win, {
         title: "保存全局剧单模板",
         defaultPath,
-        // 🌟 关键修改：默认位置设为桌面
         filters: [{ name: "Excel 表格", extensions: ["xlsx"] }]
       });
-      if (canceled || !filePath) {
-        return { success: false, msg: "取消下载" };
-      }
-      const headers = [
-        "版权",
-        "产品ID",
-        "产品名称",
-        "素材名称",
-        "素材个数",
-        "指定素材",
-        "新建项目数",
-        "新建广告数",
-        "素材文件名称"
-      ];
+      if (canceled || !filePath) return { success: false, msg: "取消下载" };
+      const headers = ["版权", "产品ID", "产品名称", "素材名称", "素材个数", "指定素材", "新建项目数", "新建广告数", "素材文件名称"];
       const worksheet = xlsx.utils.aoa_to_sheet([headers]);
       worksheet["!cols"] = [
         { wch: 10 },
-        // 版权
         { wch: 15 },
-        // 产品ID
         { wch: 20 },
-        // 产品名称
         { wch: 20 },
-        // 素材名称
         { wch: 10 },
-        // 素材个数
         { wch: 25 },
-        // 指定素材
         { wch: 12 },
-        // 新建项目数
         { wch: 12 },
-        // 新建广告数
         { wch: 25 }
-        // 素材文件名称
       ];
       const workbook = xlsx.utils.book_new();
       xlsx.utils.book_append_sheet(workbook, worksheet, "Sheet1");
       xlsx.writeFile(workbook, filePath);
       return { success: true, filePath };
     } catch (error) {
-      console.error("❌ 生成模板失败:", error);
       return { success: false, msg: error.message };
     }
   });
@@ -1410,6 +2143,106 @@ electron.app.whenReady().then(() => {
   electron.app.on("activate", () => {
     if (electron.BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+  electron.ipcMain.handle("export-dramas-excel", async (event, { dramas, config }) => {
+    try {
+      const win = electron.BrowserWindow.fromWebContents(event.sender);
+      const defaultPath = path$1.join(electron.app.getPath("desktop"), `爆款剧单_${getTodayString()}.xlsx`);
+      const { canceled, filePath } = await electron.dialog.showSaveDialog(win, {
+        title: "导出爆款剧单",
+        defaultPath,
+        filters: [{ name: "Excel 表格", extensions: ["xlsx"] }]
+      });
+      if (canceled || !filePath) return { success: false, msg: "取消下载" };
+      const headers = ["版权", "产品ID", "产品名称", "素材名称", "素材个数", "指定素材", "新建项目数", "新建广告数", "素材文件名称"];
+      const rows = [headers];
+      dramas.forEach((item) => {
+        rows.push([
+          config.copyright || "",
+          // 填入预设的版权
+          "",
+          item.bookName,
+          "",
+          config.materialCount || 30,
+          // 填入素材个数
+          "",
+          "",
+          // 填入项目数
+          "",
+          // 填入广告数
+          ""
+        ]);
+      });
+      const ws = xlsx.utils.aoa_to_sheet(rows);
+      ws["!cols"] = [
+        { wch: 12 },
+        // [0] 版权
+        { wch: 12 },
+        // [1] 产品ID
+        { wch: 35 },
+        // [2] 产品名称 (⭐加宽)
+        { wch: 15 },
+        // [3] 素材名称
+        { wch: 10 },
+        // [4] 素材个数
+        { wch: 15 },
+        // [5] 指定素材
+        { wch: 12 },
+        // [6] 新建项目数
+        { wch: 12 },
+        // [7] 新建广告数
+        { wch: 20 }
+        // [8] 素材文件名称
+      ];
+      const wb = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(wb, ws, "Sheet1");
+      xlsx.writeFile(wb, filePath);
+      return { success: true, filePath };
+    } catch (error) {
+      return { success: false, msg: error.message };
+    }
+  });
+});
+let isFetchCancelled = false;
+electron.ipcMain.on("cancel-fetch-dramas", () => {
+  isFetchCancelled = true;
+});
+const BASE_SERVER_URL = "http://129.204.86.63:3535";
+electron.ipcMain.handle("save-fetch-settings", async (event, data) => {
+  try {
+    userData.fetchSettings = data;
+    saveUserData();
+    const userKey = userData.KEY_CONFIG?.userKey;
+    if (userKey && userKey.trim() !== "") {
+      const saveUrl = `${BASE_SERVER_URL}/api/fetch-settings/save`;
+      await axios.post(saveUrl, {
+        license_key: userKey.trim(),
+        settings: data
+      }, { timeout: 5e3 });
+      console.log("✅ 雷达配置已成功同步至云端");
+    }
+    return { success: true };
+  } catch (error) {
+    console.error("❌ 保存配置时发生异常:", error.message);
+    return { success: false, msg: "本地已保存，但同步云端失败: " + error.message };
+  }
+});
+electron.ipcMain.handle("get-fetch-settings", async () => {
+  try {
+    const userKey = userData.KEY_CONFIG?.userKey;
+    if (userKey && userKey.trim() !== "") {
+      const getUrl = `${BASE_SERVER_URL}/api/fetch-settings/get?license_key=${userKey.trim()}`;
+      const response = await axios.get(getUrl, { timeout: 5e3 });
+      if (response.data.status === "ok" && response.data.data) {
+        userData.fetchSettings = response.data.data;
+        saveUserData();
+        return { success: true, data: response.data.data };
+      }
+    }
+    return { success: true, data: userData.fetchSettings || null };
+  } catch (error) {
+    console.log("⚠️ 读取云端配置失败，使用本地缓存:", error.message);
+    return { success: true, data: userData.fetchSettings || null };
+  }
 });
 electron.app.on("window-all-closed", () => {
   if (process.platform !== "darwin") electron.app.quit();

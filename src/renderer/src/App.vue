@@ -236,7 +236,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import RunTab from "./components/RunTab.vue";
 import ConfigTab from "./components/ConfigTab.vue";
 import SettingsTab from "./components/SettingsTab.vue";
-import DataFetchTab from "./components/DataFetchTab.vue"; 
+import DataFetchTab from "./components/DataFetchTab.vue";
 
 // --- 全局状态管理 ---
 const currentTab = ref("run");

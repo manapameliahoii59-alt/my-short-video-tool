@@ -464,12 +464,48 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // --- 🌟 新增：全局自动化公共鉴权服务 ---
 /**
+ * 网页 login1 返回的短剧模块为 10003；旧代码误写 3 会触发「请选择模块」。
+ */
+const DEFAULT_DRAMA_MODULE_ID = 10003;
+
+function pickDramaModuleId(modules) {
+  const list = Array.isArray(modules) ? modules : [];
+  const opened = list.filter((m) => m && m.isOpen !== false);
+  const byName =
+    opened.find((m) => String(m.moduleName || "").includes("短剧")) ||
+    list.find((m) => String(m.moduleName || "").includes("短剧"));
+  if (byName?.moduleId != null) return Number(byName.moduleId);
+  if (opened[0]?.moduleId != null) return Number(opened[0].moduleId);
+  if (list[0]?.moduleId != null) return Number(list[0].moduleId);
+  return DEFAULT_DRAMA_MODULE_ID;
+}
+
+async function selectModule(authClient, sessionId, moduleId) {
+  const headers = {
+    authorization: sessionId,
+    cookie: `ocpx_session_id=${sessionId}`,
+  };
+  const res = await authClient.post(
+    "/merchant/auth/login2",
+    { moduleId },
+    { headers },
+  );
+  const code = res.data?.code;
+  if (code !== 0 && code !== "0") {
+    throw new Error(
+      `选择模块失败(moduleId=${moduleId}): ${code ?? ""} ${res.data?.msg || "未知错误"}`,
+    );
+  }
+  return headers;
+}
+
+/**
  * 确保获取有效的登录凭证 (支持缓存复用与静默重登)
  * @param {string} account 账号
  * @param {string} password 密码
  * @param {object} currentSession 当前内存/硬盘中的 session {token, time}
  * @param {string} baseUrl 接口基准地址
-* @returns {Promise<object>} { success, session, headers, msg }
+ * @returns {Promise<object>} { success, session, headers, msg }
  */
 async function ensureAuth(account, password, currentSession = null, baseUrl = "https://api.iocpx.com") {
   let sessionId = "";
@@ -500,9 +536,16 @@ async function ensureAuth(account, password, currentSession = null, baseUrl = "h
         sessionId = "";
       } else {
         console.log("✅ [鉴权服务] 登录状态有效 (缓存复用)");
-        // 激活模块
-        await authClient.post("/merchant/auth/login2", { moduleId: 3 }, { headers: testHeaders });
-        return { success: true, session: currentSession, headers: testHeaders };
+        const moduleId =
+          currentSession.moduleId != null
+            ? Number(currentSession.moduleId)
+            : DEFAULT_DRAMA_MODULE_ID;
+        const headers = await selectModule(authClient, sessionId, moduleId);
+        return {
+          success: true,
+          session: { ...currentSession, moduleId },
+          headers,
+        };
       }
     } catch (err) {
       sessionId = "";
@@ -523,6 +566,10 @@ async function ensureAuth(account, password, currentSession = null, baseUrl = "h
         rememberMe: true,
       });
 
+      if (r1.data?.code !== 0 && r1.data?.code !== "0") {
+        throw new Error(r1.data?.msg || `login1 失败: ${r1.data?.code}`);
+      }
+
       const setCookie = r1.headers["set-cookie"];
       if (!setCookie) throw new Error("未获取到 Cookie 信息");
 
@@ -531,19 +578,11 @@ async function ensureAuth(account, password, currentSession = null, baseUrl = "h
         .split(";")[0]
         .split("=")[1];
 
-      await authClient.post(
-        "/merchant/auth/login2",
-        { moduleId: 3 },
-        { headers: { cookie: `ocpx_session_id=${sessionId}` } }
-      );
+      const moduleId = pickDramaModuleId(r1.data?.data);
+      const newHeaders = await selectModule(authClient, sessionId, moduleId);
+      const newSession = { token: sessionId, time: Date.now(), moduleId };
 
-      const newSession = { token: sessionId, time: Date.now() };
-      const newHeaders = {
-        authorization: sessionId,
-        cookie: `ocpx_session_id=${sessionId}`,
-      };
-
-      console.log("✅ [鉴权服务] 账号密码自动登录成功！");
+      console.log(`✅ [鉴权服务] 账号密码自动登录成功！已选择模块 moduleId=${moduleId}`);
       return { success: true, session: newSession, headers: newHeaders };
     } catch (err) {
       console.error("❌ [鉴权服务] 登录失败:", err.message);

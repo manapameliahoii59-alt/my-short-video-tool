@@ -587,6 +587,7 @@ const target_bid =
       bookName: productInfo.bookName,
       bookId: productInfo.bookId,
       source: productInfo.source,
+      thumbUrl:productInfo.thumbUrl,
       playletSeriesUrl: productInfo.link,
       appType: linkTemplate.appType,
       promotionLinkTemplateId: linkTemplate.id,
@@ -627,7 +628,10 @@ const target_bid =
       publishName: finalPublishName,
       accountList: JSON.stringify(accListData),
       deliveryStrategyType:false,
-      folderIdPaths:'[]'
+      folderIdPaths:'[]',
+      materialMode:0,
+      awemeId:"",
+      deliveryStrategyInfo:"{}",
     };
     
 

@@ -3,7 +3,7 @@ var __commonJS = (cb, mod) => function __require() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
 };
 var require_index_001 = __commonJS({
-  "assets/index-z9txe-jU.js"(exports, module) {
+  "assets/index-B4fhl113.js"(exports, module) {
     // @__NO_SIDE_EFFECTS__
     function makeMap(str) {
       const map2 = /* @__PURE__ */ Object.create(null);
@@ -31,6 +31,7 @@ var require_index_001 = __commonJS({
     const isMap$1 = (val) => toTypeString(val) === "[object Map]";
     const isSet$1 = (val) => toTypeString(val) === "[object Set]";
     const isDate = (val) => toTypeString(val) === "[object Date]";
+    const isRegExp = (val) => toTypeString(val) === "[object RegExp]";
     const isFunction$1 = (val) => typeof val === "function";
     const isString = (val) => typeof val === "string";
     const isSymbol$1 = (val) => typeof val === "symbol";
@@ -3218,6 +3219,211 @@ var require_index_001 = __commonJS({
     getGlobalThis().cancelIdleCallback || ((id) => clearTimeout(id));
     const isAsyncWrapper = (i) => !!i.type.__asyncLoader;
     const isKeepAlive = (vnode) => vnode.type.__isKeepAlive;
+    const KeepAliveImpl = {
+      name: `KeepAlive`,
+      // Marker for special handling inside the renderer. We are not using a ===
+      // check directly on KeepAlive in the renderer, because importing it directly
+      // would prevent it from being tree-shaken.
+      __isKeepAlive: true,
+      props: {
+        include: [String, RegExp, Array],
+        exclude: [String, RegExp, Array],
+        max: [String, Number]
+      },
+      setup(props2, { slots }) {
+        const instance = getCurrentInstance();
+        const sharedContext = instance.ctx;
+        if (!sharedContext.renderer) {
+          return () => {
+            const children = slots.default && slots.default();
+            return children && children.length === 1 ? children[0] : children;
+          };
+        }
+        const cache2 = /* @__PURE__ */ new Map();
+        const keys2 = /* @__PURE__ */ new Set();
+        let current = null;
+        const parentSuspense = instance.suspense;
+        const {
+          renderer: {
+            p: patch,
+            m: move,
+            um: _unmount,
+            o: { createElement }
+          }
+        } = sharedContext;
+        const storageContainer = createElement("div");
+        sharedContext.activate = (vnode, container, anchor, namespace, optimized) => {
+          const instance2 = vnode.component;
+          move(vnode, container, anchor, 0, parentSuspense);
+          patch(
+            instance2.vnode,
+            vnode,
+            container,
+            anchor,
+            instance2,
+            parentSuspense,
+            namespace,
+            vnode.slotScopeIds,
+            optimized
+          );
+          queuePostRenderEffect(() => {
+            instance2.isDeactivated = false;
+            if (instance2.a) {
+              invokeArrayFns(instance2.a);
+            }
+            const vnodeHook = vnode.props && vnode.props.onVnodeMounted;
+            if (vnodeHook) {
+              invokeVNodeHook(vnodeHook, instance2.parent, vnode);
+            }
+          }, parentSuspense);
+        };
+        sharedContext.deactivate = (vnode) => {
+          const instance2 = vnode.component;
+          invalidateMount(instance2.m);
+          invalidateMount(instance2.a);
+          move(vnode, storageContainer, null, 1, parentSuspense);
+          queuePostRenderEffect(() => {
+            if (instance2.da) {
+              invokeArrayFns(instance2.da);
+            }
+            const vnodeHook = vnode.props && vnode.props.onVnodeUnmounted;
+            if (vnodeHook) {
+              invokeVNodeHook(vnodeHook, instance2.parent, vnode);
+            }
+            instance2.isDeactivated = true;
+          }, parentSuspense);
+        };
+        function unmount(vnode) {
+          resetShapeFlag(vnode);
+          _unmount(vnode, instance, parentSuspense, true);
+        }
+        function pruneCache(filter) {
+          cache2.forEach((vnode, key) => {
+            const name = getComponentName(
+              isAsyncWrapper(vnode) ? vnode.type.__asyncResolved || {} : vnode.type
+            );
+            if (name && !filter(name)) {
+              pruneCacheEntry(key);
+            }
+          });
+        }
+        function pruneCacheEntry(key) {
+          const cached = cache2.get(key);
+          if (cached && (!current || !isSameVNodeType(cached, current))) {
+            unmount(cached);
+          } else if (current) {
+            resetShapeFlag(current);
+          }
+          cache2.delete(key);
+          keys2.delete(key);
+        }
+        watch(
+          () => [props2.include, props2.exclude],
+          ([include, exclude]) => {
+            include && pruneCache((name) => matches(include, name));
+            exclude && pruneCache((name) => !matches(exclude, name));
+          },
+          // prune post-render after `current` has been updated
+          { flush: "post", deep: true }
+        );
+        let pendingCacheKey = null;
+        const cacheSubtree = () => {
+          if (pendingCacheKey != null) {
+            if (isSuspense(instance.subTree.type)) {
+              queuePostRenderEffect(() => {
+                cache2.set(pendingCacheKey, getInnerChild(instance.subTree));
+              }, instance.subTree.suspense);
+            } else {
+              cache2.set(pendingCacheKey, getInnerChild(instance.subTree));
+            }
+          }
+        };
+        onMounted(cacheSubtree);
+        onUpdated(cacheSubtree);
+        onBeforeUnmount(() => {
+          cache2.forEach((cached) => {
+            const { subTree, suspense } = instance;
+            const vnode = getInnerChild(subTree);
+            if (cached.type === vnode.type && cached.key === vnode.key) {
+              resetShapeFlag(vnode);
+              const da = vnode.component.da;
+              da && queuePostRenderEffect(da, suspense);
+              return;
+            }
+            unmount(cached);
+          });
+        });
+        return () => {
+          pendingCacheKey = null;
+          if (!slots.default) {
+            return current = null;
+          }
+          const children = slots.default();
+          const rawVNode = children[0];
+          if (children.length > 1) {
+            current = null;
+            return children;
+          } else if (!isVNode(rawVNode) || !(rawVNode.shapeFlag & 4) && !(rawVNode.shapeFlag & 128)) {
+            current = null;
+            return rawVNode;
+          }
+          let vnode = getInnerChild(rawVNode);
+          if (vnode.type === Comment) {
+            current = null;
+            return vnode;
+          }
+          const comp = vnode.type;
+          const name = getComponentName(
+            isAsyncWrapper(vnode) ? vnode.type.__asyncResolved || {} : comp
+          );
+          const { include, exclude, max: max2 } = props2;
+          if (include && (!name || !matches(include, name)) || exclude && name && matches(exclude, name)) {
+            vnode.shapeFlag &= -257;
+            current = vnode;
+            return rawVNode;
+          }
+          const key = vnode.key == null ? comp : vnode.key;
+          const cachedVNode = cache2.get(key);
+          if (vnode.el) {
+            vnode = cloneVNode(vnode);
+            if (rawVNode.shapeFlag & 128) {
+              rawVNode.ssContent = vnode;
+            }
+          }
+          pendingCacheKey = key;
+          if (cachedVNode) {
+            vnode.el = cachedVNode.el;
+            vnode.component = cachedVNode.component;
+            if (vnode.transition) {
+              setTransitionHooks(vnode, vnode.transition);
+            }
+            vnode.shapeFlag |= 512;
+            keys2.delete(key);
+            keys2.add(key);
+          } else {
+            keys2.add(key);
+            if (max2 && keys2.size > parseInt(max2, 10)) {
+              pruneCacheEntry(keys2.values().next().value);
+            }
+          }
+          vnode.shapeFlag |= 256;
+          current = vnode;
+          return isSuspense(rawVNode.type) ? rawVNode : vnode;
+        };
+      }
+    };
+    const KeepAlive = KeepAliveImpl;
+    function matches(pattern, name) {
+      if (isArray$1(pattern)) {
+        return pattern.some((p2) => matches(p2, name));
+      } else if (isString(pattern)) {
+        return pattern.split(",").includes(name);
+      } else if (isRegExp(pattern)) {
+        pattern.lastIndex = 0;
+        return pattern.test(name);
+      }
+      return false;
+    }
     function onActivated(hook, target) {
       registerKeepAliveHook(hook, "a", target);
     }
@@ -3257,6 +3463,13 @@ var require_index_001 = __commonJS({
       onUnmounted(() => {
         remove(keepAliveRoot[type], injected);
       }, target);
+    }
+    function resetShapeFlag(vnode) {
+      vnode.shapeFlag &= -257;
+      vnode.shapeFlag &= -513;
+    }
+    function getInnerChild(vnode) {
+      return vnode.shapeFlag & 128 ? vnode.ssContent : vnode;
     }
     function injectHook(type, hook, target = currentInstance, prepend = false) {
       if (target) {
@@ -7846,7 +8059,7 @@ var require_index_001 = __commonJS({
       }
       return container;
     }
-    var _sfc_main$2B = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2D = /* @__PURE__ */ defineComponent({
       name: "AddLocation",
       __name: "add-location",
       setup(__props) {
@@ -7868,7 +8081,7 @@ var require_index_001 = __commonJS({
           })
         ]));
       }
-    }), add_location_default = _sfc_main$2B;
+    }), add_location_default = _sfc_main$2D;
     var _sfc_main2 = /* @__PURE__ */ defineComponent({
       name: "Aim",
       __name: "aim",
@@ -15656,9 +15869,9 @@ var require_index_001 = __commonJS({
       const { window: window2 = defaultWindow } = options;
       const isSupported = useSupported(() => window2 && "matchMedia" in window2 && typeof window2.matchMedia === "function");
       let mediaQuery;
-      const matches = /* @__PURE__ */ ref(false);
+      const matches2 = /* @__PURE__ */ ref(false);
       const handler = (event) => {
-        matches.value = event.matches;
+        matches2.value = event.matches;
       };
       const cleanup = () => {
         if (!mediaQuery)
@@ -15677,14 +15890,14 @@ var require_index_001 = __commonJS({
           mediaQuery.addEventListener("change", handler);
         else
           mediaQuery.addListener(handler);
-        matches.value = mediaQuery.matches;
+        matches2.value = mediaQuery.matches;
       });
       tryOnScopeDispose(() => {
         stopWatch();
         cleanup();
         mediaQuery = void 0;
       });
-      return matches;
+      return matches2;
     }
     function cloneFnJSON(source) {
       return JSON.parse(JSON.stringify(source));
@@ -16049,8 +16262,8 @@ var require_index_001 = __commonJS({
       tryOnMounted(update);
       useEventListener("resize", update, { passive: true });
       if (listenOrientation) {
-        const matches = useMediaQuery("(orientation: portrait)");
-        watch(matches, () => update());
+        const matches2 = useMediaQuery("(orientation: portrait)");
+        watch(matches2, () => update());
       }
       return { width, height };
     }
@@ -16383,7 +16596,7 @@ var require_index_001 = __commonJS({
       scroll: ({ scrollTop, fixed }) => isNumber(scrollTop) && isBoolean(fixed),
       [CHANGE_EVENT]: (fixed) => isBoolean(fixed)
     };
-    var _sfc_main$2A = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2C = /* @__PURE__ */ defineComponent({
       __name: "teleport",
       props: teleportProps,
       setup(__props) {
@@ -16456,7 +16669,7 @@ var require_index_001 = __commonJS({
       withPropsDefaultsSetter(component2);
       return component2;
     };
-    const ElTeleport = withInstall(_sfc_main$2A);
+    const ElTeleport = withInstall(_sfc_main$2C);
     function easeInOutCubic(t, b2, c2, d2) {
       const cc = c2 - b2;
       t /= d2 / 2;
@@ -16705,7 +16918,7 @@ var require_index_001 = __commonJS({
       return container.scrollTop;
     };
     const COMPONENT_NAME$o = "ElAffix";
-    var _sfc_main$2z = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2B = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME$o
       },
@@ -16860,7 +17073,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElAffix = withInstall(_sfc_main$2z);
+    const ElAffix = withInstall(_sfc_main$2B);
     const iconPropType = definePropType([
       String,
       Object,
@@ -16954,7 +17167,7 @@ var require_index_001 = __commonJS({
         type: String
       }
     });
-    var _sfc_main$2y = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2A = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElIcon",
         inheritAttrs: false
@@ -16989,7 +17202,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElIcon = withInstall(_sfc_main$2y);
+    const ElIcon = withInstall(_sfc_main$2A);
     var PatchFlags = /* @__PURE__ */ ((PatchFlags2) => {
       PatchFlags2[PatchFlags2["TEXT"] = 1] = "TEXT";
       PatchFlags2[PatchFlags2["CLASS"] = 2] = "CLASS";
@@ -17051,7 +17264,7 @@ var require_index_001 = __commonJS({
       });
       return result;
     };
-    var _sfc_main$2x = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2z = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElAlert"
       },
@@ -17191,7 +17404,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElAlert = withInstall(_sfc_main$2x);
+    const ElAlert = withInstall(_sfc_main$2z);
     var L = "top", W = "bottom", T$1 = "right", P$1 = "left", me = "auto", Q = [L, W, T$1, P$1], Y$1 = "start", Z = "end", Ye = "clippingParents", je = "viewport", ee = "popper", Ge = "reference", De = Q.reduce(function(e, t) {
       return e.concat([t + "-" + Y$1, t + "-" + Z]);
     }, []), Ee = [].concat(Q, [me]).reduce(function(e, t) {
@@ -18644,10 +18857,10 @@ var require_index_001 = __commonJS({
       }
       return [recordCursor, setCursor];
     }
-    const _hoisted_1$1i = ["id", "name", "minlength", "maxlength", "type", "disabled", "readonly", "autocomplete", "tabindex", "aria-label", "placeholder", "form", "autofocus", "role", "inputmode"];
-    const _hoisted_2$L = ["id", "name", "minlength", "maxlength", "tabindex", "disabled", "readonly", "autocomplete", "aria-label", "placeholder", "form", "autofocus", "rows", "role"];
+    const _hoisted_1$1k = ["id", "name", "minlength", "maxlength", "type", "disabled", "readonly", "autocomplete", "tabindex", "aria-label", "placeholder", "form", "autofocus", "role", "inputmode"];
+    const _hoisted_2$N = ["id", "name", "minlength", "maxlength", "tabindex", "disabled", "readonly", "autocomplete", "aria-label", "placeholder", "form", "autofocus", "rows", "role"];
     const COMPONENT_NAME$n = "ElInput";
-    var _sfc_main$2w = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2y = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME$n,
         inheritAttrs: false
@@ -19054,7 +19267,7 @@ var require_index_001 = __commonJS({
                         onInput: handleInput,
                         onChange: handleChange,
                         onKeydown: handleKeydown
-                      }), null, 16, _hoisted_1$1i),
+                      }), null, 16, _hoisted_1$1k),
                       createCommentVNode(" suffix slot "),
                       suffixVisible.value ? (openBlock(), createElementBlock(
                         "span",
@@ -19216,7 +19429,7 @@ var require_index_001 = __commonJS({
                     (...args) => unref(handleBlur) && unref(handleBlur)(...args)),
                     onChange: handleChange,
                     onKeydown: handleKeydown
-                  }), null, 16, _hoisted_2$L),
+                  }), null, 16, _hoisted_2$N),
                   isWordLimitVisible.value ? (openBlock(), createElementBlock(
                     "span",
                     {
@@ -19242,7 +19455,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElInput = withInstall(_sfc_main$2w);
+    const ElInput = withInstall(_sfc_main$2y);
     const scrollbarProps = buildProps({
       /**
        * @description trigger distance(px)
@@ -19399,7 +19612,7 @@ var require_index_001 = __commonJS({
       "scrollbarContextKey"
     );
     const COMPONENT_NAME$m = "Thumb";
-    var _sfc_main$2v = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2x = /* @__PURE__ */ defineComponent({
       __name: "thumb",
       props: thumbProps,
       setup(__props) {
@@ -19552,7 +19765,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    var _sfc_main$2u = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2w = /* @__PURE__ */ defineComponent({
       __name: "bar",
       props: barProps,
       setup(__props, { expose: __expose }) {
@@ -19595,13 +19808,13 @@ var require_index_001 = __commonJS({
             Fragment,
             null,
             [
-              createVNode(_sfc_main$2v, {
+              createVNode(_sfc_main$2x, {
                 move: moveX.value,
                 ratio: ratioX.value,
                 size: sizeWidth.value,
                 always: __props.always
               }, null, 8, ["move", "ratio", "size", "always"]),
-              createVNode(_sfc_main$2v, {
+              createVNode(_sfc_main$2x, {
                 move: moveY.value,
                 ratio: ratioY.value,
                 size: sizeHeight.value,
@@ -19615,9 +19828,9 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$1h = ["tabindex"];
+    const _hoisted_1$1j = ["tabindex"];
     const COMPONENT_NAME$l = "ElScrollbar";
-    var _sfc_main$2t = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2v = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME$l
       },
@@ -19836,8 +20049,8 @@ var require_index_001 = __commonJS({
                   _: 3
                   /* FORWARDED */
                 }, 8, ["id", "class", "style", "role", "aria-label", "aria-orientation"]))
-              ], 46, _hoisted_1$1h),
-              !__props.native ? (openBlock(), createBlock(_sfc_main$2u, {
+              ], 46, _hoisted_1$1j),
+              !__props.native ? (openBlock(), createBlock(_sfc_main$2w, {
                 key: 0,
                 ref_key: "barRef",
                 ref: barRef,
@@ -19851,7 +20064,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElScrollbar = withInstall(_sfc_main$2t);
+    const ElScrollbar = withInstall(_sfc_main$2v);
     const popperTriggerProps = buildProps({
       /** @description Indicates the reference element to which the popper is attached */
       virtualRef: {
@@ -20101,7 +20314,7 @@ var require_index_001 = __commonJS({
     ];
     const POPPER_INJECTION_KEY = /* @__PURE__ */ Symbol("popper");
     const POPPER_CONTENT_INJECTION_KEY = /* @__PURE__ */ Symbol("popperContent");
-    var _sfc_main$2s = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2u = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElPopper",
         inheritAttrs: false
@@ -20144,7 +20357,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    var _sfc_main$2r = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2t = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElPopperArrow",
         inheritAttrs: false
@@ -20254,7 +20467,7 @@ var require_index_001 = __commonJS({
         "class": ns.e("content")
       }, [s2]);
     }
-    var _sfc_main$2q = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2s = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElPopperTrigger",
         inheritAttrs: false
@@ -20603,7 +20816,7 @@ var require_index_001 = __commonJS({
         }
       });
     };
-    var _sfc_main$2p = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2r = /* @__PURE__ */ defineComponent({
       name: "ElFocusTrap",
       inheritAttrs: false,
       props: {
@@ -20866,7 +21079,7 @@ var require_index_001 = __commonJS({
     function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
       return renderSlot(_ctx.$slots, "default", { handleKeydown: _ctx.onKeydown });
     }
-    var ElFocusTrap = /* @__PURE__ */ _export_sfc$1(_sfc_main$2p, [["render", _sfc_render$l]]);
+    var ElFocusTrap = /* @__PURE__ */ _export_sfc$1(_sfc_main$2r, [["render", _sfc_render$l]]);
     const usePopperContentFocusTrap = (props2, emit2) => {
       const trapped = /* @__PURE__ */ ref(false);
       const focusStartRef = /* @__PURE__ */ ref();
@@ -21188,7 +21401,7 @@ var require_index_001 = __commonJS({
         updateZIndex
       };
     };
-    var _sfc_main$2o = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2q = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElPopperContent"
       },
@@ -21336,7 +21549,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElPopper = withInstall(_sfc_main$2s);
+    const ElPopper = withInstall(_sfc_main$2u);
     const TOOLTIP_INJECTION_KEY = /* @__PURE__ */ Symbol("elTooltip");
     const isTriggerType = (trigger2, type) => {
       if (isArray$1(trigger2)) {
@@ -21349,7 +21562,7 @@ var require_index_001 = __commonJS({
         isTriggerType(unref(trigger2), type) && handler(e);
       };
     };
-    var _sfc_main$2n = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2p = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTooltipTrigger"
       },
@@ -21424,7 +21637,7 @@ var require_index_001 = __commonJS({
           triggerRef: triggerRef2
         });
         return (_ctx, _cache) => {
-          return openBlock(), createBlock(unref(_sfc_main$2q), {
+          return openBlock(), createBlock(unref(_sfc_main$2s), {
             id: unref(id),
             "virtual-ref": __props.virtualRef,
             open: unref(open),
@@ -21486,7 +21699,7 @@ var require_index_001 = __commonJS({
       if (!arr && arr !== 0) return [];
       return isArray$1(arr) ? arr : [arr];
     };
-    var _sfc_main$2m = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2o = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTooltipContent",
         inheritAttrs: false
@@ -21638,7 +21851,7 @@ var require_index_001 = __commonJS({
                 persisted: ""
               }, {
                 default: withCtx(() => [
-                  withDirectives(createVNode(unref(_sfc_main$2o), mergeProps({
+                  withDirectives(createVNode(unref(_sfc_main$2q), mergeProps({
                     id: unref(id),
                     ref_key: "contentRef",
                     ref: contentRef
@@ -21687,9 +21900,9 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$1g = ["innerHTML"];
-    const _hoisted_2$K = { key: 1 };
-    var _sfc_main$2l = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$1i = ["innerHTML"];
+    const _hoisted_2$M = { key: 1 };
+    var _sfc_main$2n = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTooltip"
       },
@@ -21811,7 +22024,7 @@ var require_index_001 = __commonJS({
             role: __props.role
           }, {
             default: withCtx(() => [
-              createVNode(_sfc_main$2n, {
+              createVNode(_sfc_main$2p, {
                 disabled: __props.disabled,
                 trigger: __props.trigger,
                 "trigger-keys": __props.triggerKeys,
@@ -21825,7 +22038,7 @@ var require_index_001 = __commonJS({
                 _: 3
                 /* FORWARDED */
               }, 8, ["disabled", "trigger", "trigger-keys", "virtual-ref", "virtual-triggering", "focus-on-target"]),
-              createVNode(_sfc_main$2m, {
+              createVNode(_sfc_main$2o, {
                 ref_key: "contentRef",
                 ref: contentRef,
                 "aria-label": __props.ariaLabel,
@@ -21862,15 +22075,15 @@ var require_index_001 = __commonJS({
                     __props.rawContent ? (openBlock(), createElementBlock("span", {
                       key: 0,
                       innerHTML: __props.content
-                    }, null, 8, _hoisted_1$1g)) : (openBlock(), createElementBlock(
+                    }, null, 8, _hoisted_1$1i)) : (openBlock(), createElementBlock(
                       "span",
-                      _hoisted_2$K,
+                      _hoisted_2$M,
                       toDisplayString(__props.content),
                       1
                       /* TEXT */
                     ))
                   ]),
-                  __props.showArrow ? (openBlock(), createBlock(unref(_sfc_main$2r), { key: 0 })) : createCommentVNode("v-if", true)
+                  __props.showArrow ? (openBlock(), createBlock(unref(_sfc_main$2t), { key: 0 })) : createCommentVNode("v-if", true)
                 ]),
                 _: 3
                 /* FORWARDED */
@@ -21882,12 +22095,12 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElTooltip = withInstall(_sfc_main$2l);
-    const _hoisted_1$1f = ["aria-expanded", "aria-owns"];
-    const _hoisted_2$J = { key: 0 };
-    const _hoisted_3$m = ["id", "aria-selected", "onClick"];
+    const ElTooltip = withInstall(_sfc_main$2n);
+    const _hoisted_1$1h = ["aria-expanded", "aria-owns"];
+    const _hoisted_2$L = { key: 0 };
+    const _hoisted_3$o = ["id", "aria-selected", "onClick"];
     const COMPONENT_NAME$k = "ElAutocomplete";
-    var _sfc_main$2k = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2m = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME$k,
         inheritAttrs: false
@@ -22249,7 +22462,7 @@ var require_index_001 = __commonJS({
                     role: "listbox"
                   }, {
                     default: withCtx(() => [
-                      suggestionLoading.value ? (openBlock(), createElementBlock("li", _hoisted_2$J, [
+                      suggestionLoading.value ? (openBlock(), createElementBlock("li", _hoisted_2$L, [
                         renderSlot(_ctx.$slots, "loading", {}, () => [
                           createVNode(unref(ElIcon), {
                             class: normalizeClass(unref(ns).is("loading"))
@@ -22280,7 +22493,7 @@ var require_index_001 = __commonJS({
                                 /* TEXT */
                               )
                             ])
-                          ], 10, _hoisted_3$m);
+                          ], 10, _hoisted_3$o);
                         }),
                         128
                         /* KEYED_FRAGMENT */
@@ -22365,7 +22578,7 @@ var require_index_001 = __commonJS({
                     key: "3"
                   } : void 0
                 ]), 1040, ["model-value", "disabled"])
-              ], 14, _hoisted_1$1f)
+              ], 14, _hoisted_1$1h)
             ]),
             _: 3
             /* FORWARDED */
@@ -22373,7 +22586,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElAutocomplete = withInstall(_sfc_main$2k);
+    const ElAutocomplete = withInstall(_sfc_main$2m);
     const avatarProps = buildProps({
       /**
        * @description avatar size.
@@ -22425,8 +22638,8 @@ var require_index_001 = __commonJS({
     const avatarGroupContextKey = /* @__PURE__ */ Symbol(
       "avatarGroupContextKey"
     );
-    const _hoisted_1$1e = ["src", "alt", "srcset"];
-    var _sfc_main$2j = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$1g = ["src", "alt", "srcset"];
+    var _sfc_main$2l = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElAvatar"
       },
@@ -22488,7 +22701,7 @@ var require_index_001 = __commonJS({
                 srcset: __props.srcSet,
                 style: normalizeStyle(fitStyle.value),
                 onError: handleError2
-              }, null, 44, _hoisted_1$1e)) : __props.icon ? (openBlock(), createBlock(unref(ElIcon), { key: 1 }, {
+              }, null, 44, _hoisted_1$1g)) : __props.icon ? (openBlock(), createBlock(unref(ElIcon), { key: 1 }, {
                 default: withCtx(() => [
                   (openBlock(), createBlock(resolveDynamicComponent(__props.icon)))
                 ]),
@@ -22593,7 +22806,7 @@ var require_index_001 = __commonJS({
               "effect": props2.effect,
               "disabled": !props2.collapseAvatarsTooltip
             }, {
-              default: () => createVNode(_sfc_main$2j, {
+              default: () => createVNode(_sfc_main$2l, {
                 "size": props2.size,
                 "shape": props2.shape,
                 "class": props2.collapseClass,
@@ -22617,7 +22830,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElAvatar = withInstall(_sfc_main$2j, {
+    const ElAvatar = withInstall(_sfc_main$2l, {
       AvatarGroup
     });
     const ElAvatarGroup = withNoopInstall(AvatarGroup);
@@ -22687,7 +22900,7 @@ var require_index_001 = __commonJS({
       };
     };
     const COMPONENT_NAME$j = "ElBacktop";
-    var _sfc_main$2i = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2k = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME$j
       },
@@ -22743,7 +22956,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElBacktop = withInstall(_sfc_main$2i);
+    const ElBacktop = withInstall(_sfc_main$2k);
     const badgeProps = buildProps({
       /**
        * @description display value.
@@ -22806,7 +23019,7 @@ var require_index_001 = __commonJS({
         type: String
       }
     });
-    var _sfc_main$2h = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2j = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElBadge"
       },
@@ -22886,7 +23099,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElBadge = withInstall(_sfc_main$2h);
+    const ElBadge = withInstall(_sfc_main$2j);
     const breadcrumbProps = buildProps({
       /**
        * @description separator character
@@ -22903,8 +23116,8 @@ var require_index_001 = __commonJS({
       }
     });
     const breadcrumbKey = /* @__PURE__ */ Symbol("breadcrumbKey");
-    const _hoisted_1$1d = ["aria-label"];
-    var _sfc_main$2g = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$1f = ["aria-label"];
+    var _sfc_main$2i = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElBreadcrumb"
       },
@@ -22931,7 +23144,7 @@ var require_index_001 = __commonJS({
             role: "navigation"
           }, [
             renderSlot(_ctx.$slots, "default")
-          ], 10, _hoisted_1$1d);
+          ], 10, _hoisted_1$1f);
         };
       }
     });
@@ -22948,7 +23161,7 @@ var require_index_001 = __commonJS({
        */
       replace: Boolean
     });
-    var _sfc_main$2f = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2h = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElBreadcrumbItem"
       },
@@ -23012,10 +23225,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElBreadcrumb = withInstall(_sfc_main$2g, {
-      BreadcrumbItem: _sfc_main$2f
+    const ElBreadcrumb = withInstall(_sfc_main$2i, {
+      BreadcrumbItem: _sfc_main$2h
     });
-    const ElBreadcrumbItem = withNoopInstall(_sfc_main$2f);
+    const ElBreadcrumbItem = withNoopInstall(_sfc_main$2h);
     const buttonTypes = [
       "default",
       "primary",
@@ -24198,7 +24411,7 @@ var require_index_001 = __commonJS({
         return styles;
       });
     }
-    var _sfc_main$2e = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2g = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElButton"
       },
@@ -24320,7 +24533,7 @@ var require_index_001 = __commonJS({
         default: "horizontal"
       }
     };
-    var _sfc_main$2d = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2f = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElButtonGroup"
       },
@@ -24351,10 +24564,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElButton = withInstall(_sfc_main$2e, {
-      ButtonGroup: _sfc_main$2d
+    const ElButton = withInstall(_sfc_main$2g, {
+      ButtonGroup: _sfc_main$2f
     });
-    const ElButtonGroup$1 = withNoopInstall(_sfc_main$2d);
+    const ElButtonGroup$1 = withNoopInstall(_sfc_main$2f);
     const isValidRange$1 = (range2) => isArray$1(range2) && range2.length === 2 && range2.every((item) => isDate(item));
     const calendarProps = buildProps({
       /**
@@ -24969,9 +25182,9 @@ var require_index_001 = __commonJS({
         getSlotData
       };
     };
-    const _hoisted_1$1c = { key: 0 };
-    const _hoisted_2$I = ["onClick"];
-    var _sfc_main$2c = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$1e = { key: 0 };
+    const _hoisted_2$K = ["onClick"];
+    var _sfc_main$2e = /* @__PURE__ */ defineComponent({
       ...{
         name: "DateTable"
       },
@@ -25018,7 +25231,7 @@ var require_index_001 = __commonJS({
               cellpadding: "0"
             },
             [
-              !__props.hideHeader ? (openBlock(), createElementBlock("thead", _hoisted_1$1c, [
+              !__props.hideHeader ? (openBlock(), createElementBlock("thead", _hoisted_1$1e, [
                 createBaseVNode("tr", null, [
                   (openBlock(true), createElementBlock(
                     Fragment,
@@ -25085,7 +25298,7 @@ var require_index_001 = __commonJS({
                                 2
                                 /* CLASS */
                               )
-                            ], 10, _hoisted_2$I);
+                            ], 10, _hoisted_2$K);
                           }),
                           128
                           /* KEYED_FRAGMENT */
@@ -25286,9 +25499,9 @@ var require_index_001 = __commonJS({
       close: (evt) => evt instanceof MouseEvent,
       click: (evt) => evt instanceof MouseEvent
     };
-    const _hoisted_1$1b = ["aria-label"];
-    const _hoisted_2$H = ["aria-label"];
-    var _sfc_main$2b = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$1d = ["aria-label"];
+    const _hoisted_2$J = ["aria-label"];
+    var _sfc_main$2d = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTag"
       },
@@ -25360,7 +25573,7 @@ var require_index_001 = __commonJS({
                   _: 1
                   /* STABLE */
                 })
-              ], 10, _hoisted_1$1b)) : createCommentVNode("v-if", true)
+              ], 10, _hoisted_1$1d)) : createCommentVNode("v-if", true)
             ],
             6
             /* CLASS, STYLE */
@@ -25404,7 +25617,7 @@ var require_index_001 = __commonJS({
                       _: 1
                       /* STABLE */
                     })
-                  ], 10, _hoisted_2$H)) : createCommentVNode("v-if", true)
+                  ], 10, _hoisted_2$J)) : createCommentVNode("v-if", true)
                 ],
                 6
                 /* CLASS, STYLE */
@@ -25416,7 +25629,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElTag = withInstall(_sfc_main$2b);
+    const ElTag = withInstall(_sfc_main$2d);
     const defaultProps$4 = {
       label: "label",
       value: "value",
@@ -25561,7 +25774,7 @@ var require_index_001 = __commonJS({
         updateOption
       };
     }
-    var _sfc_main$2a = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2c = /* @__PURE__ */ defineComponent({
       name: COMPONENT_NAME$i,
       componentName: COMPONENT_NAME$i,
       props: optionProps,
@@ -25626,7 +25839,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$1a = ["id", "aria-disabled", "aria-selected"];
+    const _hoisted_1$1c = ["id", "aria-disabled", "aria-selected"];
     function _sfc_render$k(_ctx, _cache, $props, $setup, $data, $options) {
       return withDirectives((openBlock(), createElementBlock("li", {
         id: _ctx.id,
@@ -25646,14 +25859,14 @@ var require_index_001 = __commonJS({
             /* TEXT */
           )
         ])
-      ], 42, _hoisted_1$1a)), [
+      ], 42, _hoisted_1$1c)), [
         [vShow, _ctx.visible]
       ]);
     }
-    var Option = /* @__PURE__ */ _export_sfc$1(_sfc_main$2a, [["render", _sfc_render$k]]);
+    var Option = /* @__PURE__ */ _export_sfc$1(_sfc_main$2c, [["render", _sfc_render$k]]);
     const MINIMUM_INPUT_WIDTH = 11;
     const BORDER_HORIZONTAL_WIDTH = 2;
-    var _sfc_main$29 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2b = /* @__PURE__ */ defineComponent({
       name: "ElSelectDropdown",
       componentName: "ElSelectDropdown",
       setup() {
@@ -25723,7 +25936,7 @@ var require_index_001 = __commonJS({
         /* CLASS, STYLE */
       );
     }
-    var ElSelectMenu$1 = /* @__PURE__ */ _export_sfc$1(_sfc_main$29, [["render", _sfc_render$j]]);
+    var ElSelectMenu$1 = /* @__PURE__ */ _export_sfc$1(_sfc_main$2b, [["render", _sfc_render$j]]);
     const useSelect$2 = (props2, emit2) => {
       const { t } = useLocale();
       const slots = useSlots();
@@ -26802,7 +27015,7 @@ var require_index_001 = __commonJS({
     ({
       "popup-scroll": scrollbarEmits.scroll
     });
-    var _sfc_main$28 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$2a = /* @__PURE__ */ defineComponent({
       name: "ElOptionGroup",
       componentName: "ElOptionGroup",
       props: {
@@ -26904,7 +27117,7 @@ var require_index_001 = __commonJS({
         [vShow, _ctx.visible]
       ]);
     }
-    var OptionGroup = /* @__PURE__ */ _export_sfc$1(_sfc_main$28, [["render", _sfc_render$i]]);
+    var OptionGroup = /* @__PURE__ */ _export_sfc$1(_sfc_main$2a, [["render", _sfc_render$i]]);
     const nodeList = /* @__PURE__ */ new Map();
     if (isClient) {
       let startClick;
@@ -27022,7 +27235,7 @@ var require_index_001 = __commonJS({
       }
       return record;
     };
-    var _sfc_main$27 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$29 = /* @__PURE__ */ defineComponent({
       name: COMPONENT_NAME$h,
       componentName: COMPONENT_NAME$h,
       components: {
@@ -27165,9 +27378,9 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$19 = ["id", "value", "name", "disabled", "autocomplete", "tabindex", "readonly", "aria-activedescendant", "aria-controls", "aria-expanded", "aria-label"];
-    const _hoisted_2$G = ["textContent"];
-    const _hoisted_3$l = { key: 1 };
+    const _hoisted_1$1b = ["id", "value", "name", "disabled", "autocomplete", "tabindex", "readonly", "aria-activedescendant", "aria-controls", "aria-expanded", "aria-label"];
+    const _hoisted_2$I = ["textContent"];
+    const _hoisted_3$n = { key: 1 };
     function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
       const _component_el_tag = resolveComponent("el-tag");
       const _component_el_tooltip = resolveComponent("el-tooltip");
@@ -27487,14 +27700,14 @@ var require_index_001 = __commonJS({
                               onChange: _cache[5] || (_cache[5] = withModifiers(() => {
                               }, ["stop"])),
                               onClick: _cache[6] || (_cache[6] = withModifiers((...args) => _ctx.toggleMenu && _ctx.toggleMenu(...args), ["stop"]))
-                            }, null, 46, _hoisted_1$19),
+                            }, null, 46, _hoisted_1$1b),
                             _ctx.filterable ? (openBlock(), createElementBlock("span", {
                               key: 0,
                               ref: "calculatorRef",
                               "aria-hidden": "true",
                               class: normalizeClass(_ctx.nsSelect.e("input-calculator")),
                               textContent: toDisplayString(_ctx.states.inputValue)
-                            }, null, 10, _hoisted_2$G)) : createCommentVNode("v-if", true)
+                            }, null, 10, _hoisted_2$I)) : createCommentVNode("v-if", true)
                           ],
                           2
                           /* CLASS */
@@ -27528,7 +27741,7 @@ var require_index_001 = __commonJS({
                               )
                             ]) : (openBlock(), createElementBlock(
                               "span",
-                              _hoisted_3$l,
+                              _hoisted_3$n,
                               toDisplayString(_ctx.currentPlaceholder),
                               1
                               /* TEXT */
@@ -27765,14 +27978,14 @@ var require_index_001 = __commonJS({
         [_directive_click_outside, _ctx.handleClickOutside, _ctx.popperRef]
       ]);
     }
-    var Select$1 = /* @__PURE__ */ _export_sfc$1(_sfc_main$27, [["render", _sfc_render$h]]);
+    var Select$1 = /* @__PURE__ */ _export_sfc$1(_sfc_main$29, [["render", _sfc_render$h]]);
     const ElSelect = withInstall(Select$1, {
       Option,
       OptionGroup
     });
     const ElOption = withNoopInstall(Option);
     const ElOptionGroup = withNoopInstall(OptionGroup);
-    var _sfc_main$26 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$28 = /* @__PURE__ */ defineComponent({
       ...{
         name: "SelectController"
       },
@@ -27863,7 +28076,7 @@ var require_index_001 = __commonJS({
       }
     });
     const COMPONENT_NAME$g = "ElCalendar";
-    var _sfc_main$25 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$27 = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME$g
       },
@@ -27986,7 +28199,7 @@ var require_index_001 = __commonJS({
                         class: normalizeClass(unref(ns).e("select-controller"))
                       },
                       [
-                        createVNode(_sfc_main$26, {
+                        createVNode(_sfc_main$28, {
                           date: unref(date),
                           formatter: __props.formatter,
                           onDateChange: unref(handleDateChange)
@@ -28007,7 +28220,7 @@ var require_index_001 = __commonJS({
                   class: normalizeClass(unref(ns).e("body"))
                 },
                 [
-                  createVNode(_sfc_main$2c, {
+                  createVNode(_sfc_main$2e, {
                     date: unref(date),
                     "selected-day": unref(realSelectedDay),
                     onPick: unref(pickDay)
@@ -28037,7 +28250,7 @@ var require_index_001 = __commonJS({
                     Fragment,
                     null,
                     renderList(unref(validatedRange), (range_, index) => {
-                      return openBlock(), createBlock(_sfc_main$2c, {
+                      return openBlock(), createBlock(_sfc_main$2e, {
                         key: index,
                         date: range_[0],
                         "selected-day": unref(realSelectedDay),
@@ -28071,7 +28284,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElCalendar = withInstall(_sfc_main$25);
+    const ElCalendar = withInstall(_sfc_main$27);
     const cardProps = buildProps({
       /**
        * @description title of the card. Also accepts a DOM passed by `slot#header`
@@ -28115,7 +28328,7 @@ var require_index_001 = __commonJS({
         default: void 0
       }
     });
-    var _sfc_main$24 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$26 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCard"
       },
@@ -28190,7 +28403,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElCard = withInstall(_sfc_main$24);
+    const ElCard = withInstall(_sfc_main$26);
     const carouselProps = buildProps({
       /**
        * @description index of the initially active slide (starting from 0)
@@ -28644,19 +28857,19 @@ var require_index_001 = __commonJS({
         throttledIndicatorHover
       };
     };
-    const _hoisted_1$18 = ["aria-label"];
-    const _hoisted_2$F = ["aria-label"];
-    const _hoisted_3$k = ["onMouseenter", "onClick"];
-    const _hoisted_4$g = ["aria-label"];
-    const _hoisted_5$d = { key: 0 };
-    const _hoisted_6$8 = {
+    const _hoisted_1$1a = ["aria-label"];
+    const _hoisted_2$H = ["aria-label"];
+    const _hoisted_3$m = ["onMouseenter", "onClick"];
+    const _hoisted_4$i = ["aria-label"];
+    const _hoisted_5$f = { key: 0 };
+    const _hoisted_6$a = {
       key: 2,
       xmlns: "http://www.w3.org/2000/svg",
       version: "1.1",
       style: { "display": "none" }
     };
     const COMPONENT_NAME$f = "ElCarousel";
-    var _sfc_main$23 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$25 = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME$f
       },
@@ -28780,7 +28993,7 @@ var require_index_001 = __commonJS({
                       _: 1
                       /* STABLE */
                     })
-                  ], 42, _hoisted_1$18), [
+                  ], 42, _hoisted_1$1a), [
                     [vShow, (__props.arrow === "always" || unref(hover)) && (__props.loop || unref(activeIndex) > 0)]
                   ])
                 ]),
@@ -28809,7 +29022,7 @@ var require_index_001 = __commonJS({
                       _: 1
                       /* STABLE */
                     })
-                  ], 42, _hoisted_2$F), [
+                  ], 42, _hoisted_2$H), [
                     [
                       vShow,
                       (__props.arrow === "always" || unref(hover)) && (__props.loop || unref(activeIndex) < unref(items).length - 1)
@@ -28863,13 +29076,13 @@ var require_index_001 = __commonJS({
                             }, [
                               unref(hasLabel) ? (openBlock(), createElementBlock(
                                 "span",
-                                _hoisted_5$d,
+                                _hoisted_5$f,
                                 toDisplayString(item.props.label),
                                 1
                                 /* TEXT */
                               )) : createCommentVNode("v-if", true)
-                            ], 10, _hoisted_4$g)
-                          ], 42, _hoisted_3$k)), [
+                            ], 10, _hoisted_4$i)
+                          ], 42, _hoisted_3$m)), [
                             [vShow, unref(isTwoLengthShow)(index)]
                           ]);
                         }),
@@ -28884,7 +29097,7 @@ var require_index_001 = __commonJS({
                 _: 1
                 /* STABLE */
               }),
-              __props.motionBlur ? (openBlock(), createElementBlock("svg", _hoisted_6$8, [..._cache[8] || (_cache[8] = [
+              __props.motionBlur ? (openBlock(), createElementBlock("svg", _hoisted_6$a, [..._cache[8] || (_cache[8] = [
                 createBaseVNode(
                   "defs",
                   null,
@@ -29037,7 +29250,7 @@ var require_index_001 = __commonJS({
         handleItemClick
       };
     };
-    var _sfc_main$22 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$24 = /* @__PURE__ */ defineComponent({
       ...{
         name: CAROUSEL_ITEM_NAME
       },
@@ -29113,10 +29326,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElCarousel = withInstall(_sfc_main$23, {
-      CarouselItem: _sfc_main$22
+    const ElCarousel = withInstall(_sfc_main$25, {
+      CarouselItem: _sfc_main$24
     });
-    const ElCarouselItem = withNoopInstall(_sfc_main$22);
+    const ElCarouselItem = withNoopInstall(_sfc_main$24);
     const CommonProps = buildProps({
       /**
        * @description specify which key of node object is used as the node's value
@@ -29753,8 +29966,8 @@ var require_index_001 = __commonJS({
         onClickRoot
       };
     };
-    const _hoisted_1$17 = ["id", "indeterminate", "name", "tabindex", "disabled"];
-    var _sfc_main$21 = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$19 = ["id", "indeterminate", "name", "tabindex", "disabled"];
+    var _sfc_main$23 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCheckbox"
       },
@@ -29840,7 +30053,7 @@ var require_index_001 = __commonJS({
                     onBlur: _cache[3] || (_cache[3] = ($event) => isFocused.value = false),
                     onClick: _cache[4] || (_cache[4] = withModifiers(() => {
                     }, ["stop"]))
-                  }), null, 16, _hoisted_1$17), [
+                  }), null, 16, _hoisted_1$19), [
                     [vModelCheckbox, unref(model)]
                   ]),
                   createBaseVNode(
@@ -29888,8 +30101,8 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$16 = ["name", "tabindex", "disabled"];
-    var _sfc_main$20 = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$18 = ["name", "tabindex", "disabled"];
+    var _sfc_main$22 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCheckboxButton"
       },
@@ -29962,7 +30175,7 @@ var require_index_001 = __commonJS({
                 onBlur: _cache[3] || (_cache[3] = ($event) => isFocused.value = false),
                 onClick: _cache[4] || (_cache[4] = withModifiers(() => {
                 }, ["stop"]))
-              }), null, 16, _hoisted_1$16), [
+              }), null, 16, _hoisted_1$18), [
                 [vModelCheckbox, unref(model)]
               ]),
               _ctx.$slots.default || __props.label ? (openBlock(), createElementBlock(
@@ -30063,7 +30276,7 @@ var require_index_001 = __commonJS({
       value: "value",
       disabled: "disabled"
     };
-    var _sfc_main$1$ = /* @__PURE__ */ defineComponent({
+    var _sfc_main$21 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCheckboxGroup"
       },
@@ -30106,7 +30319,7 @@ var require_index_001 = __commonJS({
           return { ...omit(option, [label, value, disabled]), ...base };
         };
         const optionComponent = computed(
-          () => props2.type === "button" ? _sfc_main$20 : _sfc_main$21
+          () => props2.type === "button" ? _sfc_main$22 : _sfc_main$23
         );
         provide(checkboxGroupContextKey, {
           ...pick(/* @__PURE__ */ toRefs(props2), [
@@ -30163,12 +30376,12 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElCheckbox = withInstall(_sfc_main$21, {
-      CheckboxButton: _sfc_main$20,
-      CheckboxGroup: _sfc_main$1$
+    const ElCheckbox = withInstall(_sfc_main$23, {
+      CheckboxButton: _sfc_main$22,
+      CheckboxGroup: _sfc_main$21
     });
-    const ElCheckboxButton = withNoopInstall(_sfc_main$20);
-    const ElCheckboxGroup = withNoopInstall(_sfc_main$1$);
+    const ElCheckboxButton = withNoopInstall(_sfc_main$22);
+    const ElCheckboxGroup = withNoopInstall(_sfc_main$21);
     const radioPropsBase = buildProps({
       /**
        * @description binding value
@@ -30273,8 +30486,8 @@ var require_index_001 = __commonJS({
         actualValue
       };
     };
-    const _hoisted_1$15 = ["value", "name", "disabled", "checked"];
-    var _sfc_main$1_ = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$17 = ["value", "name", "disabled", "checked"];
+    var _sfc_main$20 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElRadio"
       },
@@ -30329,7 +30542,7 @@ var require_index_001 = __commonJS({
                     onChange: handleChange,
                     onClick: _cache[3] || (_cache[3] = withModifiers(() => {
                     }, ["stop"]))
-                  }, null, 42, _hoisted_1$15), [
+                  }, null, 42, _hoisted_1$17), [
                     [vModelRadio, unref(modelValue)]
                   ]),
                   createBaseVNode(
@@ -30374,8 +30587,8 @@ var require_index_001 = __commonJS({
     const radioButtonProps = buildProps({
       ...radioPropsBase
     });
-    const _hoisted_1$14 = ["value", "name", "disabled"];
-    var _sfc_main$1Z = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$16 = ["value", "name", "disabled"];
+    var _sfc_main$1$ = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElRadioButton"
       },
@@ -30420,7 +30633,7 @@ var require_index_001 = __commonJS({
                 onBlur: _cache[2] || (_cache[2] = ($event) => focus.value = false),
                 onClick: _cache[3] || (_cache[3] = withModifiers(() => {
                 }, ["stop"]))
-              }, null, 42, _hoisted_1$14), [
+              }, null, 42, _hoisted_1$16), [
                 [vModelRadio, unref(modelValue)]
               ]),
               createBaseVNode(
@@ -30524,8 +30737,8 @@ var require_index_001 = __commonJS({
       ...useAriaProps(["ariaLabel"])
     });
     const radioGroupEmits = radioEmits;
-    const _hoisted_1$13 = ["id", "aria-label", "aria-labelledby"];
-    var _sfc_main$1Y = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$15 = ["id", "aria-label", "aria-labelledby"];
+    var _sfc_main$1_ = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElRadioGroup"
       },
@@ -30570,7 +30783,7 @@ var require_index_001 = __commonJS({
           return { ...omit(option, [label, value, disabled]), ...base };
         };
         const optionComponent = computed(
-          () => props2.type === "button" ? _sfc_main$1Z : _sfc_main$1_
+          () => props2.type === "button" ? _sfc_main$1$ : _sfc_main$20
         );
         provide(
           radioGroupKey,
@@ -30615,16 +30828,16 @@ var require_index_001 = __commonJS({
                 /* KEYED_FRAGMENT */
               ))
             ])
-          ], 10, _hoisted_1$13);
+          ], 10, _hoisted_1$15);
         };
       }
     });
-    const ElRadio = withInstall(_sfc_main$1_, {
-      RadioButton: _sfc_main$1Z,
-      RadioGroup: _sfc_main$1Y
+    const ElRadio = withInstall(_sfc_main$20, {
+      RadioButton: _sfc_main$1$,
+      RadioGroup: _sfc_main$1_
     });
-    const ElRadioGroup = withNoopInstall(_sfc_main$1Y);
-    const ElRadioButton = withNoopInstall(_sfc_main$1Z);
+    const ElRadioGroup = withNoopInstall(_sfc_main$1_);
+    const ElRadioButton = withNoopInstall(_sfc_main$1$);
     const CASCADER_PANEL_INJECTION_KEY = /* @__PURE__ */ Symbol();
     function isVNodeEmpty(vnodes) {
       return !!(isArray$1(vnodes) ? vnodes.every(({
@@ -30663,8 +30876,8 @@ var require_index_001 = __commonJS({
         }, [label()]);
       }
     });
-    const _hoisted_1$12 = ["id", "aria-haspopup", "aria-owns", "aria-expanded", "tabindex"];
-    var _sfc_main$1X = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$14 = ["id", "aria-haspopup", "aria-owns", "aria-expanded", "tabindex"];
+    var _sfc_main$1Z = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCascaderNode"
       },
@@ -30845,11 +31058,11 @@ var require_index_001 = __commonJS({
               64
               /* STABLE_FRAGMENT */
             )) : createCommentVNode("v-if", true)
-          ], 42, _hoisted_1$12);
+          ], 42, _hoisted_1$14);
         };
       }
     });
-    var _sfc_main$1W = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1Y = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCascaderMenu"
       },
@@ -30928,7 +31141,7 @@ var require_index_001 = __commonJS({
                   Fragment,
                   null,
                   renderList(__props.nodes, (node) => {
-                    return openBlock(), createBlock(_sfc_main$1X, {
+                    return openBlock(), createBlock(_sfc_main$1Z, {
                       key: node.uid,
                       node,
                       "menu-id": menuId.value,
@@ -31237,7 +31450,7 @@ var require_index_001 = __commonJS({
       res.push(...newNodesCopy);
       return res;
     };
-    var _sfc_main$1V = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1X = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCascaderPanel"
       },
@@ -31553,7 +31766,7 @@ var require_index_001 = __commonJS({
                 Fragment,
                 null,
                 renderList(menus.value, (menu, index) => {
-                  return openBlock(), createBlock(_sfc_main$1W, {
+                  return openBlock(), createBlock(_sfc_main$1Y, {
                     key: index,
                     ref_for: true,
                     ref: (item) => menuList.value[index] = item,
@@ -31577,10 +31790,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElCascaderPanel = withInstall(_sfc_main$1V);
-    const _hoisted_1$11 = ["placeholder"];
-    const _hoisted_2$E = ["onClick"];
-    var _sfc_main$1U = /* @__PURE__ */ defineComponent({
+    const ElCascaderPanel = withInstall(_sfc_main$1X);
+    const _hoisted_1$13 = ["placeholder"];
+    const _hoisted_2$G = ["onClick"];
+    var _sfc_main$1W = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCascader"
       },
@@ -32304,7 +32517,7 @@ var require_index_001 = __commonJS({
                         (...args) => unref(handleComposition) && unref(handleComposition)(...args)),
                         onCompositionend: _cache[7] || (_cache[7] = //@ts-ignore
                         (...args) => unref(handleComposition) && unref(handleComposition)(...args))
-                      }, null, 42, _hoisted_1$11)), [
+                      }, null, 42, _hoisted_1$13)), [
                         [vModelText, searchInputValue.value]
                       ]) : createCommentVNode("v-if", true)
                     ],
@@ -32392,7 +32605,7 @@ var require_index_001 = __commonJS({
                             /* STABLE */
                           })) : createCommentVNode("v-if", true)
                         ])
-                      ], 10, _hoisted_2$E);
+                      ], 10, _hoisted_2$G);
                     }),
                     128
                     /* KEYED_FRAGMENT */
@@ -32434,7 +32647,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElCascader = withInstall(_sfc_main$1U);
+    const ElCascader = withInstall(_sfc_main$1W);
     const checkTagProps = buildProps({
       /**
        * @description is checked
@@ -32457,7 +32670,7 @@ var require_index_001 = __commonJS({
       "update:checked": (value) => isBoolean(value),
       [CHANGE_EVENT]: (value) => isBoolean(value)
     };
-    var _sfc_main$1T = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1V = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCheckTag"
       },
@@ -32496,7 +32709,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElCheckTag = withInstall(_sfc_main$1T);
+    const ElCheckTag = withInstall(_sfc_main$1V);
     const colProps = buildProps({
       /**
        * @description custom element tag
@@ -32570,7 +32783,7 @@ var require_index_001 = __commonJS({
       }
     });
     const rowContextKey = /* @__PURE__ */ Symbol("rowContextKey");
-    var _sfc_main$1S = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1U = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCol"
       },
@@ -32628,7 +32841,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElCol = withInstall(_sfc_main$1S);
+    const ElCol = withInstall(_sfc_main$1U);
     const emitChangeFn = (value) => isNumber(value) || isString(value) || isArray$1(value);
     const collapseProps = buildProps({
       /**
@@ -32738,7 +32951,7 @@ var require_index_001 = __commonJS({
         rootKls
       };
     };
-    var _sfc_main$1R = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1T = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCollapse"
       },
@@ -32798,7 +33011,7 @@ var require_index_001 = __commonJS({
        */
       disabled: Boolean
     });
-    var _sfc_main$1Q = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1S = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCollapseTransition"
       },
@@ -32878,7 +33091,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElCollapseTransition = withInstall(_sfc_main$1Q);
+    const ElCollapseTransition = withInstall(_sfc_main$1S);
     const useCollapseItem = (props2) => {
       const collapse = inject(collapseContextKey);
       const { namespace } = useNamespace("collapse");
@@ -32957,9 +33170,9 @@ var require_index_001 = __commonJS({
         scopedHeadId
       };
     };
-    const _hoisted_1$10 = ["id", "aria-expanded", "aria-controls", "aria-describedby", "tabindex", "aria-disabled"];
-    const _hoisted_2$D = ["id", "aria-hidden", "aria-labelledby"];
-    var _sfc_main$1P = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$12 = ["id", "aria-expanded", "aria-controls", "aria-describedby", "tabindex", "aria-disabled"];
+    const _hoisted_2$F = ["id", "aria-hidden", "aria-labelledby"];
+    var _sfc_main$1R = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCollapseItem"
       },
@@ -33044,7 +33257,7 @@ var require_index_001 = __commonJS({
                     /* STABLE */
                   }, 8, ["class"])
                 ])
-              ], 42, _hoisted_1$10),
+              ], 42, _hoisted_1$12),
               createVNode(unref(ElCollapseTransition), null, {
                 default: withCtx(() => [
                   withDirectives(createBaseVNode("div", {
@@ -33065,7 +33278,7 @@ var require_index_001 = __commonJS({
                       2
                       /* CLASS */
                     )
-                  ], 10, _hoisted_2$D), [
+                  ], 10, _hoisted_2$F), [
                     [vShow, unref(isActive)]
                   ])
                 ]),
@@ -33079,10 +33292,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElCollapse = withInstall(_sfc_main$1R, {
-      CollapseItem: _sfc_main$1P
+    const ElCollapse = withInstall(_sfc_main$1T, {
+      CollapseItem: _sfc_main$1R
     });
-    const ElCollapseItem = withNoopInstall(_sfc_main$1P);
+    const ElCollapseItem = withNoopInstall(_sfc_main$1R);
     const colorPickerPanelProps = buildProps({
       /**
        * @description binding value
@@ -33369,10 +33582,10 @@ var require_index_001 = __commonJS({
         update
       };
     };
-    const _hoisted_1$$ = ["aria-label", "aria-valuenow", "aria-valuetext", "aria-orientation", "tabindex", "aria-disabled"];
+    const _hoisted_1$11 = ["aria-label", "aria-valuenow", "aria-valuetext", "aria-orientation", "tabindex", "aria-disabled"];
     const minValue$1 = 0;
     const maxValue$1 = 100;
-    var _sfc_main$1O = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1Q = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElColorAlphaSlider"
       },
@@ -33459,7 +33672,7 @@ var require_index_001 = __commonJS({
                 "aria-disabled": __props.disabled,
                 onKeydown: _cache[1] || (_cache[1] = //@ts-ignore
                 (...args) => unref(handleKeydown) && unref(handleKeydown)(...args))
-              }, null, 46, _hoisted_1$$)
+              }, null, 46, _hoisted_1$11)
             ],
             2
             /* CLASS */
@@ -33467,10 +33680,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$_ = ["aria-label", "aria-valuenow", "aria-valuetext", "aria-orientation", "tabindex", "aria-disabled"];
+    const _hoisted_1$10 = ["aria-label", "aria-valuenow", "aria-valuetext", "aria-orientation", "tabindex", "aria-disabled"];
     const minValue = 0;
     const maxValue = 360;
-    var _sfc_main$1N = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1P = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElColorHueSlider"
       },
@@ -33549,7 +33762,7 @@ var require_index_001 = __commonJS({
                 "aria-disabled": __props.disabled,
                 onKeydown: _cache[1] || (_cache[1] = //@ts-ignore
                 (...args) => unref(handleKeydown) && unref(handleKeydown)(...args))
-              }, null, 46, _hoisted_1$_)
+              }, null, 46, _hoisted_1$10)
             ],
             2
             /* CLASS */
@@ -33722,8 +33935,8 @@ var require_index_001 = __commonJS({
         colorSelectorKls
       };
     };
-    const _hoisted_1$Z = ["disabled", "aria-label", "onClick"];
-    var _sfc_main$1M = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$$ = ["disabled", "aria-label", "onClick"];
+    var _sfc_main$1O = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElColorPredefine"
       },
@@ -33771,7 +33984,7 @@ var require_index_001 = __commonJS({
                           4
                           /* STYLE */
                         )
-                      ], 10, _hoisted_1$Z);
+                      ], 10, _hoisted_1$$);
                     }),
                     128
                     /* KEYED_FRAGMENT */
@@ -33931,8 +34144,8 @@ var require_index_001 = __commonJS({
         update
       };
     };
-    const _hoisted_1$Y = ["tabindex", "aria-disabled", "aria-label", "aria-valuenow", "aria-valuetext"];
-    var _sfc_main$1L = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$_ = ["tabindex", "aria-disabled", "aria-label", "aria-valuenow", "aria-valuetext"];
+    var _sfc_main$1N = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElSvPanel"
       },
@@ -34000,7 +34213,7 @@ var require_index_001 = __commonJS({
                 "aria-valuetext": ariaValuetext.value,
                 onKeydown: _cache[0] || (_cache[0] = //@ts-ignore
                 (...args) => unref(handleKeydown) && unref(handleKeydown)(...args))
-              }, null, 46, _hoisted_1$Y)
+              }, null, 46, _hoisted_1$_)
             ],
             6
             /* CLASS, STYLE */
@@ -34029,7 +34242,7 @@ var require_index_001 = __commonJS({
         color
       };
     };
-    var _sfc_main$1K = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1M = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElColorPickerPanel"
       },
@@ -34125,7 +34338,7 @@ var require_index_001 = __commonJS({
                   class: normalizeClass(unref(ns).e("wrapper"))
                 },
                 [
-                  createVNode(_sfc_main$1N, {
+                  createVNode(_sfc_main$1P, {
                     ref_key: "hueRef",
                     ref: hueRef,
                     class: "hue-slider",
@@ -34133,7 +34346,7 @@ var require_index_001 = __commonJS({
                     vertical: "",
                     disabled: unref(disabled)
                   }, null, 8, ["color", "disabled"]),
-                  createVNode(_sfc_main$1L, {
+                  createVNode(_sfc_main$1N, {
                     ref_key: "svRef",
                     ref: svRef,
                     color: unref(color),
@@ -34143,14 +34356,14 @@ var require_index_001 = __commonJS({
                 2
                 /* CLASS */
               ),
-              __props.showAlpha ? (openBlock(), createBlock(_sfc_main$1O, {
+              __props.showAlpha ? (openBlock(), createBlock(_sfc_main$1Q, {
                 key: 0,
                 ref_key: "alphaRef",
                 ref: alphaRef,
                 color: unref(color),
                 disabled: unref(disabled)
               }, null, 8, ["color", "disabled"])) : createCommentVNode("v-if", true),
-              __props.predefine ? (openBlock(), createBlock(_sfc_main$1M, {
+              __props.predefine ? (openBlock(), createBlock(_sfc_main$1O, {
                 key: 1,
                 ref: "predefine",
                 "enable-alpha": __props.showAlpha,
@@ -34186,7 +34399,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElColorPickerPanel = withInstall(_sfc_main$1K);
+    const ElColorPickerPanel = withInstall(_sfc_main$1M);
     const colorPickerProps = buildProps({
       /**
        * @description when color-picker inactive and persistent is false, the color panel will be destroyed
@@ -34281,8 +34494,8 @@ var require_index_001 = __commonJS({
       blur: (evt) => evt instanceof FocusEvent,
       clear: () => true
     };
-    const _hoisted_1$X = ["id", "aria-label", "aria-labelledby", "aria-description", "aria-disabled", "tabindex"];
-    var _sfc_main$1J = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$Z = ["id", "aria-label", "aria-labelledby", "aria-description", "aria-disabled", "tabindex"];
+    var _sfc_main$1L = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElColorPicker"
       },
@@ -34667,7 +34880,7 @@ var require_index_001 = __commonJS({
                   2
                   /* CLASS */
                 )
-              ], 16, _hoisted_1$X)
+              ], 16, _hoisted_1$Z)
             ]),
             _: 1
             /* STABLE */
@@ -34675,7 +34888,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElColorPicker = withInstall(_sfc_main$1J);
+    const ElColorPicker = withInstall(_sfc_main$1L);
     const configProviderProps = buildProps({
       /**
        * @description Controlling if the users want a11y features
@@ -34776,7 +34989,7 @@ var require_index_001 = __commonJS({
       }
     });
     const ElConfigProvider = withInstall(ConfigProvider);
-    var _sfc_main$1I = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1K = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElContainer"
       },
@@ -34819,7 +35032,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    var _sfc_main$1H = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1J = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElAside"
       },
@@ -34849,7 +35062,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    var _sfc_main$1G = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1I = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElFooter"
       },
@@ -34879,7 +35092,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    var _sfc_main$1F = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1H = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElHeader"
       },
@@ -34911,7 +35124,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    var _sfc_main$1E = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1G = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElMain"
       },
@@ -34933,16 +35146,16 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElContainer = withInstall(_sfc_main$1I, {
-      Aside: _sfc_main$1H,
-      Footer: _sfc_main$1G,
-      Header: _sfc_main$1F,
-      Main: _sfc_main$1E
+    const ElContainer = withInstall(_sfc_main$1K, {
+      Aside: _sfc_main$1J,
+      Footer: _sfc_main$1I,
+      Header: _sfc_main$1H,
+      Main: _sfc_main$1G
     });
-    const ElAside = withNoopInstall(_sfc_main$1H);
-    const ElFooter = withNoopInstall(_sfc_main$1G);
-    const ElHeader = withNoopInstall(_sfc_main$1F);
-    const ElMain = withNoopInstall(_sfc_main$1E);
+    const ElAside = withNoopInstall(_sfc_main$1J);
+    const ElFooter = withNoopInstall(_sfc_main$1I);
+    const ElHeader = withNoopInstall(_sfc_main$1H);
+    const ElMain = withNoopInstall(_sfc_main$1G);
     var customParseFormat$2 = { exports: {} };
     var customParseFormat$1 = customParseFormat$2.exports;
     var hasRequiredCustomParseFormat;
@@ -35466,9 +35679,9 @@ var require_index_001 = __commonJS({
       endPlaceholder: String,
       disabled: Boolean
     });
-    const _hoisted_1$W = ["id", "name", "placeholder", "value", "disabled"];
-    const _hoisted_2$C = ["id", "name", "placeholder", "value", "disabled"];
-    var _sfc_main$1D = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$Y = ["id", "name", "placeholder", "value", "disabled"];
+    const _hoisted_2$E = ["id", "name", "placeholder", "value", "disabled"];
+    var _sfc_main$1F = /* @__PURE__ */ defineComponent({
       ...{
         name: "PickerRangeTrigger",
         inheritAttrs: false
@@ -35574,7 +35787,7 @@ var require_index_001 = __commonJS({
                 disabled: _ctx.disabled,
                 onInput: handleStartInput,
                 onChange: handleStartChange
-              }), null, 16, _hoisted_1$W),
+              }), null, 16, _hoisted_1$Y),
               renderSlot(_ctx.$slots, "range-separator"),
               createBaseVNode("input", mergeProps(unref(attrs), {
                 id: _ctx.id && _ctx.id[1],
@@ -35587,7 +35800,7 @@ var require_index_001 = __commonJS({
                 disabled: _ctx.disabled,
                 onInput: handleEndInput,
                 onChange: handleEndChange
-              }), null, 16, _hoisted_2$C),
+              }), null, 16, _hoisted_2$E),
               renderSlot(_ctx.$slots, "suffix")
             ],
             38
@@ -35596,7 +35809,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    var _sfc_main$1C = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1E = /* @__PURE__ */ defineComponent({
       ...{
         name: "Picker"
       },
@@ -36094,7 +36307,7 @@ var require_index_001 = __commonJS({
                 ]),
                 _: 1
                 /* STABLE */
-              }, 8, ["id", "model-value", "name", "size", "disabled", "placeholder", "class", "style", "readonly", "aria-label", "tabindex", "onFocus", "onBlur"])) : (openBlock(), createBlock(_sfc_main$1D, {
+              }, 8, ["id", "model-value", "name", "size", "disabled", "placeholder", "class", "style", "readonly", "aria-label", "tabindex", "onFocus", "onBlur"])) : (openBlock(), createBlock(_sfc_main$1F, {
                 key: 1,
                 id: (
                   // https://github.com/vuejs/language-tools/issues/2104#issuecomment-3092541527
@@ -36405,9 +36618,9 @@ var require_index_001 = __commonJS({
         el[SCOPE$4] = null;
       }
     };
-    const _hoisted_1$V = ["onClick"];
-    const _hoisted_2$B = ["onMouseenter"];
-    var _sfc_main$1B = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$X = ["onClick"];
+    const _hoisted_2$D = ["onMouseenter"];
+    var _sfc_main$1D = /* @__PURE__ */ defineComponent({
       __name: "basic-time-spinner",
       props: basicTimeSpinnerProps,
       emits: [CHANGE_EVENT, "select-range", "set-option"],
@@ -36688,7 +36901,7 @@ var require_index_001 = __commonJS({
                               64
                               /* STABLE_FRAGMENT */
                             ))
-                          ], 10, _hoisted_1$V);
+                          ], 10, _hoisted_1$X);
                         }),
                         128
                         /* KEYED_FRAGMENT */
@@ -36798,7 +37011,7 @@ var require_index_001 = __commonJS({
                       2
                       /* CLASS */
                     )
-                  ], 42, _hoisted_2$B);
+                  ], 42, _hoisted_2$D);
                 }),
                 128
                 /* KEYED_FRAGMENT */
@@ -36810,7 +37023,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    var _sfc_main$1A = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1C = /* @__PURE__ */ defineComponent({
       __name: "panel-time-pick",
       props: panelTimePickerProps,
       emits: ["pick", "select-range", "set-picker-option"],
@@ -36943,7 +37156,7 @@ var require_index_001 = __commonJS({
                       class: normalizeClass([unref(ns).be("panel", "content"), { "has-seconds": showSeconds.value }])
                     },
                     [
-                      createVNode(_sfc_main$1B, {
+                      createVNode(_sfc_main$1D, {
                         ref: "spinner",
                         role: _ctx.datetimeRole || "start",
                         "arrow-control": unref(arrowControl),
@@ -37013,8 +37226,8 @@ var require_index_001 = __commonJS({
         type: definePropType(Array)
       }
     });
-    const _hoisted_1$U = ["disabled"];
-    var _sfc_main$1z = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$W = ["disabled"];
+    var _sfc_main$1B = /* @__PURE__ */ defineComponent({
       __name: "panel-time-range",
       props: panelTimeRangeProps,
       emits: ["pick", "select-range", "set-picker-option"],
@@ -37241,7 +37454,7 @@ var require_index_001 = __commonJS({
                           class: normalizeClass(startContainerKls.value)
                         },
                         [
-                          createVNode(_sfc_main$1B, {
+                          createVNode(_sfc_main$1D, {
                             ref: "minSpinner",
                             role: "start",
                             "show-seconds": showSeconds.value,
@@ -37284,7 +37497,7 @@ var require_index_001 = __commonJS({
                           class: normalizeClass(endContainerKls.value)
                         },
                         [
-                          createVNode(_sfc_main$1B, {
+                          createVNode(_sfc_main$1D, {
                             ref: "maxSpinner",
                             role: "end",
                             "show-seconds": showSeconds.value,
@@ -37332,7 +37545,7 @@ var require_index_001 = __commonJS({
                     class: normalizeClass([unref(nsTime).be("panel", "btn"), "confirm"]),
                     disabled: btnConfirmDisabled.value,
                     onClick: _cache[1] || (_cache[1] = ($event) => handleConfirm())
-                  }, toDisplayString(unref(t)("el.datepicker.confirm")), 11, _hoisted_1$U)
+                  }, toDisplayString(unref(t)("el.datepicker.confirm")), 11, _hoisted_1$W)
                 ],
                 2
                 /* CLASS */
@@ -37358,7 +37571,7 @@ var require_index_001 = __commonJS({
       emits: [UPDATE_MODEL_EVENT],
       setup(props2, ctx) {
         const commonPicker = /* @__PURE__ */ ref();
-        const [type, Panel] = props2.isRange ? ["timerange", _sfc_main$1z] : ["time", _sfc_main$1A];
+        const [type, Panel] = props2.isRange ? ["timerange", _sfc_main$1B] : ["time", _sfc_main$1C];
         const modelUpdater = (value) => ctx.emit(UPDATE_MODEL_EVENT, value);
         provide(PICKER_POPPER_OPTIONS_INJECTION_KEY, props2.popperOptions);
         ctx.expose({
@@ -37394,7 +37607,7 @@ var require_index_001 = __commonJS({
         return () => {
           var _a;
           const format2 = (_a = props2.format) != null ? _a : DEFAULT_FORMATS_TIME;
-          return createVNode(_sfc_main$1C, mergeProps(props2, {
+          return createVNode(_sfc_main$1E, mergeProps(props2, {
             "ref": commonPicker,
             "type": type,
             "format": format2,
@@ -38294,10 +38507,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$T = ["aria-label"];
-    const _hoisted_2$A = ["aria-label"];
-    const _hoisted_3$j = ["aria-current", "aria-selected", "tabindex", "aria-disabled"];
-    var _sfc_main$1y = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$V = ["aria-label"];
+    const _hoisted_2$C = ["aria-label"];
+    const _hoisted_3$l = ["aria-current", "aria-selected", "tabindex", "aria-disabled"];
+    var _sfc_main$1A = /* @__PURE__ */ defineComponent({
       __name: "basic-date-table",
       props: basicDateTableProps,
       emits: basicDateTableEmits,
@@ -38376,7 +38589,7 @@ var require_index_001 = __commonJS({
                         key,
                         "aria-label": unref(t)("el.datepicker.weeksFull." + week),
                         scope: "col"
-                      }, toDisplayString(unref(t)("el.datepicker.weeks." + week)), 9, _hoisted_2$A);
+                      }, toDisplayString(unref(t)("el.datepicker.weeks." + week)), 9, _hoisted_2$C);
                     }),
                     128
                     /* KEYED_FRAGMENT */
@@ -38410,7 +38623,7 @@ var require_index_001 = __commonJS({
                               (...args) => unref(handleFocus) && unref(handleFocus)(...args))
                             }, [
                               createVNode(unref(ElDatePickerCell), { cell }, null, 8, ["cell"])
-                            ], 42, _hoisted_3$j);
+                            ], 42, _hoisted_3$l);
                           }),
                           128
                           /* KEYED_FRAGMENT */
@@ -38427,7 +38640,7 @@ var require_index_001 = __commonJS({
               512
               /* NEED_PATCH */
             )
-          ], 42, _hoisted_1$T);
+          ], 42, _hoisted_1$V);
         };
       }
     });
@@ -38435,9 +38648,9 @@ var require_index_001 = __commonJS({
       ...datePickerSharedProps,
       selectionMode: selectionModeWithDefault("month")
     });
-    const _hoisted_1$S = ["aria-label"];
-    const _hoisted_2$z = ["aria-selected", "aria-label", "tabindex", "onKeydown"];
-    var _sfc_main$1x = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$U = ["aria-label"];
+    const _hoisted_2$B = ["aria-selected", "aria-label", "tabindex", "onKeydown"];
+    var _sfc_main$1z = /* @__PURE__ */ defineComponent({
       __name: "basic-month-table",
       props: basicMonthTableProps,
       emits: ["changerange", "pick", "select"],
@@ -38674,7 +38887,7 @@ var require_index_001 = __commonJS({
                                 renderText: unref(t)("el.datepicker.months." + months.value[cell.text])
                               }
                             }, null, 8, ["cell"])
-                          ], 42, _hoisted_2$z);
+                          ], 42, _hoisted_2$B);
                         }),
                         128
                         /* KEYED_FRAGMENT */
@@ -38688,7 +38901,7 @@ var require_index_001 = __commonJS({
               512
               /* NEED_PATCH */
             )
-          ], 42, _hoisted_1$S);
+          ], 42, _hoisted_1$U);
         };
       }
     });
@@ -38696,9 +38909,9 @@ var require_index_001 = __commonJS({
       ...datePickerSharedProps,
       selectionMode: selectionModeWithDefault("year")
     });
-    const _hoisted_1$R = ["aria-label"];
-    const _hoisted_2$y = ["aria-selected", "aria-label", "tabindex", "onKeydown"];
-    var _sfc_main$1w = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$T = ["aria-label"];
+    const _hoisted_2$A = ["aria-selected", "aria-label", "tabindex", "onKeydown"];
+    var _sfc_main$1y = /* @__PURE__ */ defineComponent({
       __name: "basic-year-table",
       props: basicYearTableProps,
       emits: ["changerange", "pick", "select"],
@@ -38922,7 +39135,7 @@ var require_index_001 = __commonJS({
                             ]
                           }, [
                             createVNode(unref(ElDatePickerCell), { cell }, null, 8, ["cell"])
-                          ], 42, _hoisted_2$y);
+                          ], 42, _hoisted_2$A);
                         }),
                         128
                         /* KEYED_FRAGMENT */
@@ -38936,18 +39149,18 @@ var require_index_001 = __commonJS({
               512
               /* NEED_PATCH */
             )
-          ], 42, _hoisted_1$R);
+          ], 42, _hoisted_1$T);
         };
       }
     });
-    const _hoisted_1$Q = ["disabled", "onClick"];
-    const _hoisted_2$x = ["aria-label", "disabled"];
-    const _hoisted_3$i = ["aria-label", "disabled"];
-    const _hoisted_4$f = ["tabindex", "aria-disabled"];
-    const _hoisted_5$c = ["tabindex", "aria-disabled"];
-    const _hoisted_6$7 = ["aria-label", "disabled"];
-    const _hoisted_7$6 = ["aria-label", "disabled"];
-    var _sfc_main$1v = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$S = ["disabled", "onClick"];
+    const _hoisted_2$z = ["aria-label", "disabled"];
+    const _hoisted_3$k = ["aria-label", "disabled"];
+    const _hoisted_4$h = ["tabindex", "aria-disabled"];
+    const _hoisted_5$e = ["tabindex", "aria-disabled"];
+    const _hoisted_6$9 = ["aria-label", "disabled"];
+    const _hoisted_7$8 = ["aria-label", "disabled"];
+    var _sfc_main$1x = /* @__PURE__ */ defineComponent({
       __name: "panel-date-pick",
       props: panelDatePickProps,
       emits: ["pick", "set-picker-option", "panel-change"],
@@ -39444,7 +39657,7 @@ var require_index_001 = __commonJS({
                             disabled: unref(dateDisabled),
                             class: normalizeClass(unref(ppNs).e("shortcut")),
                             onClick: ($event) => handleShortcutClick(shortcut)
-                          }, toDisplayString(shortcut.text), 11, _hoisted_1$Q);
+                          }, toDisplayString(shortcut.text), 11, _hoisted_1$S);
                         }),
                         128
                         /* KEYED_FRAGMENT */
@@ -39503,7 +39716,7 @@ var require_index_001 = __commonJS({
                                 onInput: _cache[1] || (_cache[1] = (val) => userInputTime.value = val),
                                 onChange: handleVisibleTimeChange
                               }, null, 8, ["placeholder", "model-value", "disabled", "readonly"]),
-                              createVNode(unref(_sfc_main$1A), {
+                              createVNode(unref(_sfc_main$1C), {
                                 visible: timePickerVisible.value,
                                 format: timeFormat.value,
                                 "parsed-value": innerDate.value,
@@ -39550,7 +39763,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_2$x),
+                              ], 10, _hoisted_2$z),
                               withDirectives(createBaseVNode("button", {
                                 type: "button",
                                 "aria-label": unref(t)(`el.datepicker.prevMonth`),
@@ -39567,7 +39780,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_3$i), [
+                              ], 10, _hoisted_3$k), [
                                 [vShow, currentView.value === "date"]
                               ])
                             ],
@@ -39582,7 +39795,7 @@ var require_index_001 = __commonJS({
                             "aria-disabled": _ctx.disabled,
                             onKeydown: _cache[4] || (_cache[4] = withKeys(($event) => showPicker("year"), ["enter"])),
                             onClick: _cache[5] || (_cache[5] = ($event) => showPicker("year"))
-                          }, toDisplayString(yearLabel.value), 43, _hoisted_4$f),
+                          }, toDisplayString(yearLabel.value), 43, _hoisted_4$h),
                           withDirectives(createBaseVNode("span", {
                             role: "button",
                             "aria-live": "polite",
@@ -39594,7 +39807,7 @@ var require_index_001 = __commonJS({
                             ]),
                             onKeydown: _cache[6] || (_cache[6] = withKeys(($event) => showPicker("month"), ["enter"])),
                             onClick: _cache[7] || (_cache[7] = ($event) => showPicker("month"))
-                          }, toDisplayString(unref(t)(`el.datepicker.month${month.value + 1}`)), 43, _hoisted_5$c), [
+                          }, toDisplayString(unref(t)(`el.datepicker.month${month.value + 1}`)), 43, _hoisted_5$e), [
                             [vShow, currentView.value === "date"]
                           ]),
                           createBaseVNode(
@@ -39619,7 +39832,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_6$7), [
+                              ], 10, _hoisted_6$9), [
                                 [vShow, currentView.value === "date"]
                               ]),
                               createBaseVNode("button", {
@@ -39638,7 +39851,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_7$6)
+                              ], 10, _hoisted_7$8)
                             ],
                             2
                             /* CLASS */
@@ -39656,7 +39869,7 @@ var require_index_001 = __commonJS({
                           onKeydown: handleKeydownTable
                         },
                         [
-                          currentView.value === "date" ? (openBlock(), createBlock(_sfc_main$1y, {
+                          currentView.value === "date" ? (openBlock(), createBlock(_sfc_main$1A, {
                             key: 0,
                             ref_key: "currentViewRef",
                             ref: currentViewRef,
@@ -39669,7 +39882,7 @@ var require_index_001 = __commonJS({
                             "show-week-number": _ctx.showWeekNumber,
                             onPick: handleDatePick
                           }, null, 8, ["selection-mode", "date", "parsed-value", "disabled-date", "disabled", "cell-class-name", "show-week-number"])) : createCommentVNode("v-if", true),
-                          currentView.value === "year" ? (openBlock(), createBlock(_sfc_main$1w, {
+                          currentView.value === "year" ? (openBlock(), createBlock(_sfc_main$1y, {
                             key: 1,
                             ref_key: "currentViewRef",
                             ref: currentViewRef,
@@ -39681,7 +39894,7 @@ var require_index_001 = __commonJS({
                             "cell-class-name": unref(cellClassName),
                             onPick: handleYearPick
                           }, null, 8, ["selection-mode", "date", "disabled-date", "disabled", "parsed-value", "cell-class-name"])) : createCommentVNode("v-if", true),
-                          currentView.value === "month" ? (openBlock(), createBlock(_sfc_main$1x, {
+                          currentView.value === "month" ? (openBlock(), createBlock(_sfc_main$1z, {
                             key: 2,
                             ref_key: "currentViewRef",
                             ref: currentViewRef,
@@ -40010,21 +40223,21 @@ var require_index_001 = __commonJS({
         adjustDateByView
       };
     };
-    const _hoisted_1$P = ["disabled", "onClick"];
-    const _hoisted_2$w = ["aria-label", "disabled"];
-    const _hoisted_3$h = ["aria-label", "disabled"];
-    const _hoisted_4$e = ["disabled", "aria-label"];
-    const _hoisted_5$b = ["disabled", "aria-label"];
-    const _hoisted_6$6 = ["tabindex", "aria-disabled"];
-    const _hoisted_7$5 = ["tabindex", "aria-disabled"];
-    const _hoisted_8$5 = ["disabled", "aria-label"];
-    const _hoisted_9$5 = ["disabled", "aria-label"];
-    const _hoisted_10$5 = ["aria-label", "disabled"];
-    const _hoisted_11$5 = ["disabled", "aria-label"];
-    const _hoisted_12$3 = ["tabindex", "aria-disabled"];
-    const _hoisted_13$3 = ["tabindex", "aria-disabled"];
+    const _hoisted_1$R = ["disabled", "onClick"];
+    const _hoisted_2$y = ["aria-label", "disabled"];
+    const _hoisted_3$j = ["aria-label", "disabled"];
+    const _hoisted_4$g = ["disabled", "aria-label"];
+    const _hoisted_5$d = ["disabled", "aria-label"];
+    const _hoisted_6$8 = ["tabindex", "aria-disabled"];
+    const _hoisted_7$7 = ["tabindex", "aria-disabled"];
+    const _hoisted_8$7 = ["disabled", "aria-label"];
+    const _hoisted_9$7 = ["disabled", "aria-label"];
+    const _hoisted_10$7 = ["aria-label", "disabled"];
+    const _hoisted_11$7 = ["disabled", "aria-label"];
+    const _hoisted_12$6 = ["tabindex", "aria-disabled"];
+    const _hoisted_13$6 = ["tabindex", "aria-disabled"];
     const unit$2 = "month";
-    var _sfc_main$1u = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1w = /* @__PURE__ */ defineComponent({
       __name: "panel-date-range",
       props: panelDateRangeProps,
       emits: [
@@ -40429,7 +40642,7 @@ var require_index_001 = __commonJS({
                             disabled: unref(dateRangeDisabled),
                             class: normalizeClass(unref(ppNs).e("shortcut")),
                             onClick: ($event) => unref(handleShortcutClick)(shortcut)
-                          }, toDisplayString(shortcut.text), 11, _hoisted_1$P);
+                          }, toDisplayString(shortcut.text), 11, _hoisted_1$R);
                         }),
                         128
                         /* KEYED_FRAGMENT */
@@ -40496,7 +40709,7 @@ var require_index_001 = __commonJS({
                                     onInput: _cache[3] || (_cache[3] = (val) => handleTimeInput(val, "min")),
                                     onChange: _cache[4] || (_cache[4] = (val) => handleTimeChange(val, "min"))
                                   }, null, 8, ["class", "disabled", "placeholder", "model-value", "readonly"]),
-                                  createVNode(unref(_sfc_main$1A), {
+                                  createVNode(unref(_sfc_main$1C), {
                                     visible: minTimePickerVisible.value,
                                     format: timeFormat.value,
                                     "datetime-role": "start",
@@ -40567,7 +40780,7 @@ var require_index_001 = __commonJS({
                                     onInput: _cache[8] || (_cache[8] = (val) => handleTimeInput(val, "max")),
                                     onChange: _cache[9] || (_cache[9] = (val) => handleTimeChange(val, "max"))
                                   }, null, 8, ["class", "disabled", "placeholder", "model-value", "readonly"]),
-                                  createVNode(unref(_sfc_main$1A), {
+                                  createVNode(unref(_sfc_main$1C), {
                                     "datetime-role": "end",
                                     visible: maxTimePickerVisible.value,
                                     format: timeFormat.value,
@@ -40616,7 +40829,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_2$w),
+                              ], 10, _hoisted_2$y),
                               withDirectives(createBaseVNode("button", {
                                 type: "button",
                                 class: normalizeClass([unref(ppNs).e("icon-btn"), "arrow-left"]),
@@ -40633,7 +40846,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_3$h), [
+                              ], 10, _hoisted_3$j), [
                                 [vShow, unref(leftCurrentView) === "date"]
                               ]),
                               _ctx.unlinkPanels ? (openBlock(), createElementBlock("button", {
@@ -40656,7 +40869,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_4$e)) : createCommentVNode("v-if", true),
+                              ], 10, _hoisted_4$g)) : createCommentVNode("v-if", true),
                               _ctx.unlinkPanels && unref(leftCurrentView) === "date" ? (openBlock(), createElementBlock("button", {
                                 key: 1,
                                 type: "button",
@@ -40677,7 +40890,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_5$b)) : createCommentVNode("v-if", true),
+                              ], 10, _hoisted_5$d)) : createCommentVNode("v-if", true),
                               createBaseVNode("div", null, [
                                 createBaseVNode("span", {
                                   role: "button",
@@ -40687,7 +40900,7 @@ var require_index_001 = __commonJS({
                                   "aria-disabled": _ctx.disabled,
                                   onKeydown: _cache[10] || (_cache[10] = withKeys(($event) => unref(showLeftPicker)("year"), ["enter"])),
                                   onClick: _cache[11] || (_cache[11] = ($event) => unref(showLeftPicker)("year"))
-                                }, toDisplayString(unref(leftYearLabel)), 43, _hoisted_6$6),
+                                }, toDisplayString(unref(leftYearLabel)), 43, _hoisted_6$8),
                                 withDirectives(createBaseVNode("span", {
                                   role: "button",
                                   "aria-live": "polite",
@@ -40699,7 +40912,7 @@ var require_index_001 = __commonJS({
                                   ]),
                                   onKeydown: _cache[12] || (_cache[12] = withKeys(($event) => unref(showLeftPicker)("month"), ["enter"])),
                                   onClick: _cache[13] || (_cache[13] = ($event) => unref(showLeftPicker)("month"))
-                                }, toDisplayString(unref(t)(`el.datepicker.month${leftDate.value.month() + 1}`)), 43, _hoisted_7$5), [
+                                }, toDisplayString(unref(t)(`el.datepicker.month${leftDate.value.month() + 1}`)), 43, _hoisted_7$7), [
                                   [vShow, unref(leftCurrentView) === "date"]
                                 ])
                               ])
@@ -40707,7 +40920,7 @@ var require_index_001 = __commonJS({
                             2
                             /* CLASS */
                           ),
-                          unref(leftCurrentView) === "date" ? (openBlock(), createBlock(_sfc_main$1y, {
+                          unref(leftCurrentView) === "date" ? (openBlock(), createBlock(_sfc_main$1A, {
                             key: 0,
                             ref_key: "leftCurrentViewRef",
                             ref: leftCurrentViewRef,
@@ -40724,7 +40937,7 @@ var require_index_001 = __commonJS({
                             onPick: handleRangePick,
                             onSelect: unref(onSelect)
                           }, null, 8, ["date", "min-date", "max-date", "range-state", "disabled-date", "cell-class-name", "show-week-number", "disabled", "onChangerange", "onSelect"])) : createCommentVNode("v-if", true),
-                          unref(leftCurrentView) === "year" ? (openBlock(), createBlock(_sfc_main$1w, {
+                          unref(leftCurrentView) === "year" ? (openBlock(), createBlock(_sfc_main$1y, {
                             key: 1,
                             ref_key: "leftCurrentViewRef",
                             ref: leftCurrentViewRef,
@@ -40735,7 +40948,7 @@ var require_index_001 = __commonJS({
                             disabled: unref(dateRangeDisabled),
                             onPick: unref(handleLeftYearPick)
                           }, null, 8, ["date", "disabled-date", "parsed-value", "disabled", "onPick"])) : createCommentVNode("v-if", true),
-                          unref(leftCurrentView) === "month" ? (openBlock(), createBlock(_sfc_main$1x, {
+                          unref(leftCurrentView) === "month" ? (openBlock(), createBlock(_sfc_main$1z, {
                             key: 2,
                             ref_key: "leftCurrentViewRef",
                             ref: leftCurrentViewRef,
@@ -40782,7 +40995,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_8$5)) : createCommentVNode("v-if", true),
+                              ], 10, _hoisted_8$7)) : createCommentVNode("v-if", true),
                               _ctx.unlinkPanels && unref(rightCurrentView) === "date" ? (openBlock(), createElementBlock("button", {
                                 key: 1,
                                 type: "button",
@@ -40803,7 +41016,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_9$5)) : createCommentVNode("v-if", true),
+                              ], 10, _hoisted_9$7)) : createCommentVNode("v-if", true),
                               createBaseVNode("button", {
                                 type: "button",
                                 "aria-label": unref(t)(`el.datepicker.nextYear`),
@@ -40820,7 +41033,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_10$5),
+                              ], 10, _hoisted_10$7),
                               withDirectives(createBaseVNode("button", {
                                 type: "button",
                                 class: normalizeClass([unref(ppNs).e("icon-btn"), "arrow-right"]),
@@ -40837,7 +41050,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_11$5), [
+                              ], 10, _hoisted_11$7), [
                                 [vShow, unref(rightCurrentView) === "date"]
                               ]),
                               createBaseVNode("div", null, [
@@ -40849,7 +41062,7 @@ var require_index_001 = __commonJS({
                                   "aria-disabled": _ctx.disabled,
                                   onKeydown: _cache[14] || (_cache[14] = withKeys(($event) => unref(showRightPicker)("year"), ["enter"])),
                                   onClick: _cache[15] || (_cache[15] = ($event) => unref(showRightPicker)("year"))
-                                }, toDisplayString(unref(rightYearLabel)), 43, _hoisted_12$3),
+                                }, toDisplayString(unref(rightYearLabel)), 43, _hoisted_12$6),
                                 withDirectives(createBaseVNode("span", {
                                   role: "button",
                                   "aria-live": "polite",
@@ -40861,7 +41074,7 @@ var require_index_001 = __commonJS({
                                   ]),
                                   onKeydown: _cache[16] || (_cache[16] = withKeys(($event) => unref(showRightPicker)("month"), ["enter"])),
                                   onClick: _cache[17] || (_cache[17] = ($event) => unref(showRightPicker)("month"))
-                                }, toDisplayString(unref(t)(`el.datepicker.month${rightDate.value.month() + 1}`)), 43, _hoisted_13$3), [
+                                }, toDisplayString(unref(t)(`el.datepicker.month${rightDate.value.month() + 1}`)), 43, _hoisted_13$6), [
                                   [vShow, unref(rightCurrentView) === "date"]
                                 ])
                               ])
@@ -40869,7 +41082,7 @@ var require_index_001 = __commonJS({
                             2
                             /* CLASS */
                           ),
-                          unref(rightCurrentView) === "date" ? (openBlock(), createBlock(_sfc_main$1y, {
+                          unref(rightCurrentView) === "date" ? (openBlock(), createBlock(_sfc_main$1A, {
                             key: 0,
                             ref_key: "rightCurrentViewRef",
                             ref: rightCurrentViewRef,
@@ -40886,7 +41099,7 @@ var require_index_001 = __commonJS({
                             onPick: handleRangePick,
                             onSelect: unref(onSelect)
                           }, null, 8, ["date", "min-date", "max-date", "range-state", "disabled-date", "cell-class-name", "show-week-number", "disabled", "onChangerange", "onSelect"])) : createCommentVNode("v-if", true),
-                          unref(rightCurrentView) === "year" ? (openBlock(), createBlock(_sfc_main$1w, {
+                          unref(rightCurrentView) === "year" ? (openBlock(), createBlock(_sfc_main$1y, {
                             key: 1,
                             ref_key: "rightCurrentViewRef",
                             ref: rightCurrentViewRef,
@@ -40897,7 +41110,7 @@ var require_index_001 = __commonJS({
                             disabled: unref(dateRangeDisabled),
                             onPick: unref(handleRightYearPick)
                           }, null, 8, ["date", "disabled-date", "parsed-value", "disabled", "onPick"])) : createCommentVNode("v-if", true),
-                          unref(rightCurrentView) === "month" ? (openBlock(), createBlock(_sfc_main$1x, {
+                          unref(rightCurrentView) === "month" ? (openBlock(), createBlock(_sfc_main$1z, {
                             key: 2,
                             ref_key: "rightCurrentViewRef",
                             ref: rightCurrentViewRef,
@@ -41028,13 +41241,13 @@ var require_index_001 = __commonJS({
         rightYear
       };
     };
-    const _hoisted_1$O = ["disabled", "onClick"];
-    const _hoisted_2$v = ["disabled"];
-    const _hoisted_3$g = ["disabled"];
-    const _hoisted_4$d = ["disabled"];
-    const _hoisted_5$a = ["disabled"];
+    const _hoisted_1$Q = ["disabled", "onClick"];
+    const _hoisted_2$x = ["disabled"];
+    const _hoisted_3$i = ["disabled"];
+    const _hoisted_4$f = ["disabled"];
+    const _hoisted_5$c = ["disabled"];
     const unit$1 = "year";
-    var _sfc_main$1t = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1v = /* @__PURE__ */ defineComponent({
       ...{
         name: "DatePickerMonthRange"
       },
@@ -41187,7 +41400,7 @@ var require_index_001 = __commonJS({
                             class: normalizeClass(unref(ppNs).e("shortcut")),
                             disabled: unref(monthRangeDisabled),
                             onClick: ($event) => unref(handleShortcutClick)(shortcut)
-                          }, toDisplayString(shortcut.text), 11, _hoisted_1$O);
+                          }, toDisplayString(shortcut.text), 11, _hoisted_1$Q);
                         }),
                         128
                         /* KEYED_FRAGMENT */
@@ -41230,7 +41443,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_2$v),
+                              ], 10, _hoisted_2$x),
                               _ctx.unlinkPanels ? (openBlock(), createElementBlock("button", {
                                 key: 0,
                                 type: "button",
@@ -41251,7 +41464,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_3$g)) : createCommentVNode("v-if", true),
+                              ], 10, _hoisted_3$i)) : createCommentVNode("v-if", true),
                               createBaseVNode(
                                 "div",
                                 null,
@@ -41263,7 +41476,7 @@ var require_index_001 = __commonJS({
                             2
                             /* CLASS */
                           ),
-                          createVNode(_sfc_main$1x, {
+                          createVNode(_sfc_main$1z, {
                             "selection-mode": "range",
                             date: leftDate.value,
                             "min-date": unref(minDate),
@@ -41312,7 +41525,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_4$d)) : createCommentVNode("v-if", true),
+                              ], 10, _hoisted_4$f)) : createCommentVNode("v-if", true),
                               createBaseVNode("button", {
                                 type: "button",
                                 class: normalizeClass([unref(ppNs).e("icon-btn"), "d-arrow-right"]),
@@ -41329,7 +41542,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_5$a),
+                              ], 10, _hoisted_5$c),
                               createBaseVNode(
                                 "div",
                                 null,
@@ -41341,7 +41554,7 @@ var require_index_001 = __commonJS({
                             2
                             /* CLASS */
                           ),
-                          createVNode(_sfc_main$1x, {
+                          createVNode(_sfc_main$1z, {
                             "selection-mode": "range",
                             date: rightDate.value,
                             "min-date": unref(minDate),
@@ -41431,14 +41644,14 @@ var require_index_001 = __commonJS({
         rightYear
       };
     };
-    const _hoisted_1$N = ["disabled", "onClick"];
-    const _hoisted_2$u = ["disabled"];
-    const _hoisted_3$f = ["disabled"];
-    const _hoisted_4$c = ["disabled"];
-    const _hoisted_5$9 = ["disabled"];
+    const _hoisted_1$P = ["disabled", "onClick"];
+    const _hoisted_2$w = ["disabled"];
+    const _hoisted_3$h = ["disabled"];
+    const _hoisted_4$e = ["disabled"];
+    const _hoisted_5$b = ["disabled"];
     const step = 10;
     const unit = "year";
-    var _sfc_main$1s = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1u = /* @__PURE__ */ defineComponent({
       ...{
         name: "DatePickerYearRange"
       },
@@ -41620,7 +41833,7 @@ var require_index_001 = __commonJS({
                             class: normalizeClass(unref(ppNs).e("shortcut")),
                             disabled: unref(yearRangeDisabled),
                             onClick: ($event) => unref(handleShortcutClick)(shortcut)
-                          }, toDisplayString(shortcut.text), 11, _hoisted_1$N);
+                          }, toDisplayString(shortcut.text), 11, _hoisted_1$P);
                         }),
                         128
                         /* KEYED_FRAGMENT */
@@ -41663,7 +41876,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_2$u),
+                              ], 10, _hoisted_2$w),
                               _ctx.unlinkPanels ? (openBlock(), createElementBlock("button", {
                                 key: 0,
                                 type: "button",
@@ -41681,7 +41894,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_3$f)) : createCommentVNode("v-if", true),
+                              ], 10, _hoisted_3$h)) : createCommentVNode("v-if", true),
                               createBaseVNode(
                                 "div",
                                 null,
@@ -41693,7 +41906,7 @@ var require_index_001 = __commonJS({
                             2
                             /* CLASS */
                           ),
-                          createVNode(_sfc_main$1w, {
+                          createVNode(_sfc_main$1y, {
                             "selection-mode": "range",
                             date: leftDate.value,
                             "min-date": unref(minDate),
@@ -41739,7 +41952,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_4$c)) : createCommentVNode("v-if", true),
+                              ], 10, _hoisted_4$e)) : createCommentVNode("v-if", true),
                               createBaseVNode("button", {
                                 type: "button",
                                 class: normalizeClass(rightPanelKls.value.arrowRightBtn),
@@ -41756,7 +41969,7 @@ var require_index_001 = __commonJS({
                                     /* STABLE */
                                   })
                                 ])
-                              ], 10, _hoisted_5$9),
+                              ], 10, _hoisted_5$b),
                               createBaseVNode(
                                 "div",
                                 null,
@@ -41768,7 +41981,7 @@ var require_index_001 = __commonJS({
                             2
                             /* CLASS */
                           ),
-                          createVNode(_sfc_main$1w, {
+                          createVNode(_sfc_main$1y, {
                             "selection-mode": "range",
                             date: rightDate.value,
                             "min-date": unref(minDate),
@@ -41804,16 +42017,16 @@ var require_index_001 = __commonJS({
       switch (type) {
         case "daterange":
         case "datetimerange": {
-          return _sfc_main$1u;
+          return _sfc_main$1w;
         }
         case "monthrange": {
-          return _sfc_main$1t;
+          return _sfc_main$1v;
         }
         case "yearrange": {
-          return _sfc_main$1s;
+          return _sfc_main$1u;
         }
         default: {
-          return _sfc_main$1v;
+          return _sfc_main$1x;
         }
       }
     };
@@ -41930,7 +42143,7 @@ var require_index_001 = __commonJS({
         return () => {
           var _a;
           const format2 = (_a = props2.format) != null ? _a : DEFAULT_FORMATS_DATEPICKER[props2.type] || DEFAULT_FORMATS_DATE;
-          return createVNode(_sfc_main$1C, mergeProps(props2, {
+          return createVNode(_sfc_main$1E, mergeProps(props2, {
             "format": format2,
             "type": props2.type,
             "ref": commonPicker,
@@ -42136,8 +42349,8 @@ var require_index_001 = __commonJS({
         }
       }
     });
-    const _hoisted_1$M = { key: 1 };
-    var _sfc_main$1r = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$O = { key: 1 };
+    var _sfc_main$1t = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElDescriptionsRow"
       },
@@ -42185,7 +42398,7 @@ var require_index_001 = __commonJS({
             ],
             64
             /* STABLE_FRAGMENT */
-          )) : (openBlock(), createElementBlock("tr", _hoisted_1$M, [
+          )) : (openBlock(), createElementBlock("tr", _hoisted_1$O, [
             (openBlock(true), createElementBlock(
               Fragment,
               null,
@@ -42232,7 +42445,7 @@ var require_index_001 = __commonJS({
       }
     });
     const COMPONENT_NAME$e = "ElDescriptionsItem";
-    var _sfc_main$1q = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1s = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElDescriptions"
       },
@@ -42377,7 +42590,7 @@ var require_index_001 = __commonJS({
                           Fragment,
                           null,
                           renderList(getRows(), (row, _index) => {
-                            return openBlock(), createBlock(_sfc_main$1r, {
+                            return openBlock(), createBlock(_sfc_main$1t, {
                               key: _index,
                               row
                             }, null, 8, ["row"]);
@@ -42478,7 +42691,7 @@ var require_index_001 = __commonJS({
       name: COMPONENT_NAME$e,
       props: descriptionItemProps
     });
-    const ElDescriptions = withInstall(_sfc_main$1q, {
+    const ElDescriptions = withInstall(_sfc_main$1s, {
       DescriptionsItem: DescriptionItem
     });
     const ElDescriptionsItem = withNoopInstall(DescriptionItem);
@@ -42875,10 +43088,10 @@ var require_index_001 = __commonJS({
         updatePosition
       };
     };
-    const _hoisted_1$L = ["aria-level"];
-    const _hoisted_2$t = ["aria-label"];
-    const _hoisted_3$e = ["id"];
-    var _sfc_main$1p = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$N = ["aria-level"];
+    const _hoisted_2$v = ["aria-label"];
+    const _hoisted_3$g = ["id"];
+    var _sfc_main$1r = /* @__PURE__ */ defineComponent({
       ...{ name: "ElDialogContent" },
       __name: "dialog-content",
       props: dialogContentProps,
@@ -42933,7 +43146,7 @@ var require_index_001 = __commonJS({
                       role: "heading",
                       "aria-level": __props.ariaLevel,
                       class: normalizeClass(unref(ns).e("title"))
-                    }, toDisplayString(__props.title), 11, _hoisted_1$L)
+                    }, toDisplayString(__props.title), 11, _hoisted_1$N)
                   ]),
                   __props.showClose ? (openBlock(), createElementBlock("button", {
                     key: 0,
@@ -42951,7 +43164,7 @@ var require_index_001 = __commonJS({
                       _: 1
                       /* STABLE */
                     }, 8, ["class"])
-                  ], 10, _hoisted_2$t)) : createCommentVNode("v-if", true)
+                  ], 10, _hoisted_2$v)) : createCommentVNode("v-if", true)
                 ],
                 2
                 /* CLASS */
@@ -42961,7 +43174,7 @@ var require_index_001 = __commonJS({
                 class: normalizeClass([unref(ns).e("body"), __props.bodyClass])
               }, [
                 renderSlot(_ctx.$slots, "default")
-              ], 10, _hoisted_3$e),
+              ], 10, _hoisted_3$g),
               _ctx.$slots.footer ? (openBlock(), createElementBlock(
                 "footer",
                 {
@@ -43275,8 +43488,8 @@ var require_index_001 = __commonJS({
         closing
       };
     };
-    const _hoisted_1$K = ["aria-label", "aria-labelledby", "aria-describedby"];
-    var _sfc_main$1o = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$M = ["aria-label", "aria-labelledby", "aria-describedby"];
+    var _sfc_main$1q = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElDialog",
         inheritAttrs: false
@@ -43396,7 +43609,7 @@ var require_index_001 = __commonJS({
                               onReleaseRequested: unref(onCloseRequested)
                             }, {
                               default: withCtx(() => [
-                                unref(rendered) ? (openBlock(), createBlock(_sfc_main$1p, mergeProps({
+                                unref(rendered) ? (openBlock(), createBlock(_sfc_main$1r, mergeProps({
                                   key: 0,
                                   ref_key: "dialogContentRef",
                                   ref: dialogContentRef
@@ -43441,7 +43654,7 @@ var require_index_001 = __commonJS({
                               _: 3
                               /* FORWARDED */
                             }, 8, ["trapped", "onFocusAfterTrapped", "onFocusAfterReleased", "onFocusoutPrevented", "onReleaseRequested"])
-                          ], 46, _hoisted_1$K)
+                          ], 46, _hoisted_1$M)
                         ]),
                         _: 3
                         /* FORWARDED */
@@ -43463,7 +43676,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElDialog = withInstall(_sfc_main$1o);
+    const ElDialog = withInstall(_sfc_main$1q);
     const dividerProps = buildProps({
       /**
        * @description Set divider's direction
@@ -43489,7 +43702,7 @@ var require_index_001 = __commonJS({
         default: "solid"
       }
     });
-    var _sfc_main$1n = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1p = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElDivider"
       },
@@ -43531,7 +43744,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElDivider = withInstall(_sfc_main$1n);
+    const ElDivider = withInstall(_sfc_main$1p);
     const drawerProps = buildProps({
       ...dialogProps,
       direction: {
@@ -43648,11 +43861,11 @@ var require_index_001 = __commonJS({
         isHorizontal: isHorizontal2
       };
     }
-    const _hoisted_1$J = ["aria-label", "aria-labelledby", "aria-describedby"];
-    const _hoisted_2$s = ["id", "aria-level"];
-    const _hoisted_3$d = ["aria-label"];
-    const _hoisted_4$b = ["id"];
-    var _sfc_main$1m = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$L = ["aria-label", "aria-labelledby", "aria-describedby"];
+    const _hoisted_2$u = ["id", "aria-level"];
+    const _hoisted_3$f = ["aria-label"];
+    const _hoisted_4$d = ["id"];
+    var _sfc_main$1o = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElDrawer",
         inheritAttrs: false
@@ -43792,7 +44005,7 @@ var require_index_001 = __commonJS({
                                       role: "heading",
                                       "aria-level": __props.headerAriaLevel,
                                       class: normalizeClass(unref(ns).e("title"))
-                                    }, toDisplayString(__props.title), 11, _hoisted_2$s)
+                                    }, toDisplayString(__props.title), 11, _hoisted_2$u)
                                   ]) : renderSlot(_ctx.$slots, "title", { key: 1 }, () => [
                                     createCommentVNode(" DEPRECATED SLOT ")
                                   ]),
@@ -43813,7 +44026,7 @@ var require_index_001 = __commonJS({
                                       _: 1
                                       /* STABLE */
                                     }, 8, ["class"])
-                                  ], 10, _hoisted_3$d)) : createCommentVNode("v-if", true)
+                                  ], 10, _hoisted_3$f)) : createCommentVNode("v-if", true)
                                 ],
                                 2
                                 /* CLASS */
@@ -43824,7 +44037,7 @@ var require_index_001 = __commonJS({
                                 class: normalizeClass([unref(ns).e("body"), __props.bodyClass])
                               }, [
                                 renderSlot(_ctx.$slots, "default")
-                              ], 10, _hoisted_4$b)) : createCommentVNode("v-if", true),
+                              ], 10, _hoisted_4$d)) : createCommentVNode("v-if", true),
                               _ctx.$slots.footer ? (openBlock(), createElementBlock(
                                 "div",
                                 {
@@ -43850,7 +44063,7 @@ var require_index_001 = __commonJS({
                                 6
                                 /* CLASS, STYLE */
                               )) : createCommentVNode("v-if", true)
-                            ], 16, _hoisted_1$J)
+                            ], 16, _hoisted_1$L)
                           ]),
                           _: 3
                           /* FORWARDED */
@@ -43873,22 +44086,22 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElDrawer = withInstall(_sfc_main$1m);
-    var _sfc_main$1l = /* @__PURE__ */ defineComponent({
+    const ElDrawer = withInstall(_sfc_main$1o);
+    var _sfc_main$1n = /* @__PURE__ */ defineComponent({
       inheritAttrs: false
     });
     function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
       return renderSlot(_ctx.$slots, "default");
     }
-    var Collection = /* @__PURE__ */ _export_sfc$1(_sfc_main$1l, [["render", _sfc_render$g]]);
-    var _sfc_main$1k = /* @__PURE__ */ defineComponent({
+    var Collection = /* @__PURE__ */ _export_sfc$1(_sfc_main$1n, [["render", _sfc_render$g]]);
+    var _sfc_main$1m = /* @__PURE__ */ defineComponent({
       name: "ElCollectionItem",
       inheritAttrs: false
     });
     function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
       return renderSlot(_ctx.$slots, "default");
     }
-    var CollectionItem = /* @__PURE__ */ _export_sfc$1(_sfc_main$1k, [["render", _sfc_render$f]]);
+    var CollectionItem = /* @__PURE__ */ _export_sfc$1(_sfc_main$1m, [["render", _sfc_render$f]]);
     const COLLECTION_ITEM_SIGN = `data-el-collection-item`;
     const createCollectionWithScope = (name) => {
       const COLLECTION_NAME = `El${name}Collection`;
@@ -44009,7 +44222,7 @@ var require_index_001 = __commonJS({
     const CURRENT_TAB_ID_CHANGE_EVT = "currentTabIdChange";
     const ENTRY_FOCUS_EVT = "rovingFocusGroup.entryFocus";
     const EVT_OPTS = { bubbles: false, cancelable: true };
-    var _sfc_main$1j = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1l = /* @__PURE__ */ defineComponent({
       name: "ElRovingFocusGroupImpl",
       inheritAttrs: false,
       props: rovingFocusGroupProps,
@@ -44143,8 +44356,8 @@ var require_index_001 = __commonJS({
     function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
       return renderSlot(_ctx.$slots, "default");
     }
-    var ElRovingFocusGroupImpl = /* @__PURE__ */ _export_sfc$1(_sfc_main$1j, [["render", _sfc_render$e]]);
-    var _sfc_main$1i = /* @__PURE__ */ defineComponent({
+    var ElRovingFocusGroupImpl = /* @__PURE__ */ _export_sfc$1(_sfc_main$1l, [["render", _sfc_render$e]]);
+    var _sfc_main$1k = /* @__PURE__ */ defineComponent({
       name: "ElRovingFocusGroup",
       components: {
         ElFocusGroupCollection: ElCollection,
@@ -44174,7 +44387,7 @@ var require_index_001 = __commonJS({
         /* FORWARDED */
       });
     }
-    var ElRovingFocusGroup = /* @__PURE__ */ _export_sfc$1(_sfc_main$1i, [["render", _sfc_render$d]]);
+    var ElRovingFocusGroup = /* @__PURE__ */ _export_sfc$1(_sfc_main$1k, [["render", _sfc_render$d]]);
     const dropdownProps = buildProps({
       /**
        * @description how to trigger
@@ -44357,7 +44570,7 @@ var require_index_001 = __commonJS({
     const DROPDOWN_INJECTION_KEY = /* @__PURE__ */ Symbol("elDropdown");
     const DROPDOWN_INSTANCE_INJECTION_KEY = "elDropdown";
     const { ButtonGroup: ElButtonGroup } = ElButton;
-    var _sfc_main$1h = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1j = /* @__PURE__ */ defineComponent({
       name: "ElDropdown",
       components: {
         ElButton,
@@ -44613,8 +44826,8 @@ var require_index_001 = __commonJS({
         /* CLASS */
       );
     }
-    var Dropdown = /* @__PURE__ */ _export_sfc$1(_sfc_main$1h, [["render", _sfc_render$c]]);
-    var _sfc_main$1g = /* @__PURE__ */ defineComponent({
+    var Dropdown = /* @__PURE__ */ _export_sfc$1(_sfc_main$1j, [["render", _sfc_render$c]]);
+    var _sfc_main$1i = /* @__PURE__ */ defineComponent({
       components: {
         ElRovingFocusCollectionItem: ElCollectionItem
       },
@@ -44698,8 +44911,8 @@ var require_index_001 = __commonJS({
         /* FORWARDED */
       }, 8, ["id", "focusable", "active"]);
     }
-    var ElRovingFocusItem = /* @__PURE__ */ _export_sfc$1(_sfc_main$1g, [["render", _sfc_render$b]]);
-    var _sfc_main$1f = /* @__PURE__ */ defineComponent({
+    var ElRovingFocusItem = /* @__PURE__ */ _export_sfc$1(_sfc_main$1i, [["render", _sfc_render$b]]);
+    var _sfc_main$1h = /* @__PURE__ */ defineComponent({
       name: "DropdownItemImpl",
       components: {
         ElIcon
@@ -44757,7 +44970,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$I = ["aria-disabled", "tabindex", "role"];
+    const _hoisted_1$K = ["aria-disabled", "tabindex", "role"];
     function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
       const _component_el_icon = resolveComponent("el-icon");
       return openBlock(), createElementBlock(
@@ -44797,13 +45010,13 @@ var require_index_001 = __commonJS({
               /* FORWARDED */
             })) : createCommentVNode("v-if", true),
             renderSlot(_ctx.$slots, "default")
-          ], 16, _hoisted_1$I)
+          ], 16, _hoisted_1$K)
         ],
         64
         /* STABLE_FRAGMENT */
       );
     }
-    var ElDropdownItemImpl = /* @__PURE__ */ _export_sfc$1(_sfc_main$1f, [["render", _sfc_render$a]]);
+    var ElDropdownItemImpl = /* @__PURE__ */ _export_sfc$1(_sfc_main$1h, [["render", _sfc_render$a]]);
     const useDropdown = () => {
       const elDropdown = inject(
         DROPDOWN_INSTANCE_INJECTION_KEY,
@@ -44815,7 +45028,7 @@ var require_index_001 = __commonJS({
         _elDropdownSize
       };
     };
-    var _sfc_main$1e = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1g = /* @__PURE__ */ defineComponent({
       name: "ElDropdownItem",
       components: {
         ElRovingFocusItem,
@@ -44917,8 +45130,8 @@ var require_index_001 = __commonJS({
         /* FORWARDED */
       }, 8, ["focusable"]);
     }
-    var DropdownItem = /* @__PURE__ */ _export_sfc$1(_sfc_main$1e, [["render", _sfc_render$9]]);
-    var _sfc_main$1d = /* @__PURE__ */ defineComponent({
+    var DropdownItem = /* @__PURE__ */ _export_sfc$1(_sfc_main$1g, [["render", _sfc_render$9]]);
+    var _sfc_main$1f = /* @__PURE__ */ defineComponent({
       name: "ElDropdownMenu",
       props: dropdownMenuProps,
       setup(props2) {
@@ -44980,7 +45193,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$H = ["role", "aria-labelledby"];
+    const _hoisted_1$J = ["role", "aria-labelledby"];
     function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
       return openBlock(), createElementBlock("ul", {
         ref: _ctx.dropdownListWrapperRef,
@@ -44995,9 +45208,9 @@ var require_index_001 = __commonJS({
         onMousedown: _cache[3] || (_cache[3] = withModifiers((...args) => _ctx.onMousedown && _ctx.onMousedown(...args), ["self"]))
       }, [
         renderSlot(_ctx.$slots, "default")
-      ], 46, _hoisted_1$H);
+      ], 46, _hoisted_1$J);
     }
-    var DropdownMenu = /* @__PURE__ */ _export_sfc$1(_sfc_main$1d, [["render", _sfc_render$8]]);
+    var DropdownMenu = /* @__PURE__ */ _export_sfc$1(_sfc_main$1f, [["render", _sfc_render$8]]);
     const ElDropdown = withInstall(Dropdown, {
       DropdownItem,
       DropdownMenu
@@ -45024,40 +45237,40 @@ var require_index_001 = __commonJS({
         default: ""
       }
     });
-    const _hoisted_1$G = {
+    const _hoisted_1$I = {
       viewBox: "0 0 79 86",
       version: "1.1",
       xmlns: "http://www.w3.org/2000/svg",
       "xmlns:xlink": "http://www.w3.org/1999/xlink"
     };
-    const _hoisted_2$r = ["id"];
-    const _hoisted_3$c = ["stop-color"];
-    const _hoisted_4$a = ["stop-color"];
-    const _hoisted_5$8 = ["id"];
-    const _hoisted_6$5 = ["stop-color"];
-    const _hoisted_7$4 = ["stop-color"];
-    const _hoisted_8$4 = ["id"];
-    const _hoisted_9$4 = {
+    const _hoisted_2$t = ["id"];
+    const _hoisted_3$e = ["stop-color"];
+    const _hoisted_4$c = ["stop-color"];
+    const _hoisted_5$a = ["id"];
+    const _hoisted_6$7 = ["stop-color"];
+    const _hoisted_7$6 = ["stop-color"];
+    const _hoisted_8$6 = ["id"];
+    const _hoisted_9$6 = {
       stroke: "none",
       "stroke-width": "1",
       fill: "none",
       "fill-rule": "evenodd"
     };
-    const _hoisted_10$4 = { transform: "translate(-1268.000000, -535.000000)" };
-    const _hoisted_11$4 = { transform: "translate(1268.000000, 535.000000)" };
-    const _hoisted_12$2 = ["fill"];
-    const _hoisted_13$2 = ["fill"];
-    const _hoisted_14$2 = { transform: "translate(34.500000, 31.500000) scale(-1, 1) rotate(-25.000000) translate(-34.500000, -31.500000) translate(7.000000, 10.000000)" };
-    const _hoisted_15$2 = ["fill"];
-    const _hoisted_16$2 = ["fill"];
-    const _hoisted_17$2 = ["fill"];
-    const _hoisted_18$2 = ["fill"];
-    const _hoisted_19$2 = ["fill"];
-    const _hoisted_20$2 = { transform: "translate(53.000000, 45.000000)" };
-    const _hoisted_21$2 = ["fill", "xlink:href"];
-    const _hoisted_22$2 = ["fill", "mask"];
-    const _hoisted_23$1 = ["fill"];
-    var _sfc_main$1c = /* @__PURE__ */ defineComponent({
+    const _hoisted_10$6 = { transform: "translate(-1268.000000, -535.000000)" };
+    const _hoisted_11$6 = { transform: "translate(1268.000000, 535.000000)" };
+    const _hoisted_12$5 = ["fill"];
+    const _hoisted_13$5 = ["fill"];
+    const _hoisted_14$4 = { transform: "translate(34.500000, 31.500000) scale(-1, 1) rotate(-25.000000) translate(-34.500000, -31.500000) translate(7.000000, 10.000000)" };
+    const _hoisted_15$4 = ["fill"];
+    const _hoisted_16$4 = ["fill"];
+    const _hoisted_17$4 = ["fill"];
+    const _hoisted_18$3 = ["fill"];
+    const _hoisted_19$3 = ["fill"];
+    const _hoisted_20$3 = { transform: "translate(53.000000, 45.000000)" };
+    const _hoisted_21$3 = ["fill", "xlink:href"];
+    const _hoisted_22$3 = ["fill", "mask"];
+    const _hoisted_23$2 = ["fill"];
+    var _sfc_main$1e = /* @__PURE__ */ defineComponent({
       ...{
         name: "ImgEmpty"
       },
@@ -45066,7 +45279,7 @@ var require_index_001 = __commonJS({
         const ns = useNamespace("empty");
         const id = useId();
         return (_ctx, _cache) => {
-          return openBlock(), createElementBlock("svg", _hoisted_1$G, [
+          return openBlock(), createElementBlock("svg", _hoisted_1$I, [
             createBaseVNode("defs", null, [
               createBaseVNode("linearGradient", {
                 id: `linearGradient-1-${unref(id)}`,
@@ -45078,12 +45291,12 @@ var require_index_001 = __commonJS({
                 createBaseVNode("stop", {
                   "stop-color": `var(${unref(ns).cssVarBlockName("fill-color-1")})`,
                   offset: "0%"
-                }, null, 8, _hoisted_3$c),
+                }, null, 8, _hoisted_3$e),
                 createBaseVNode("stop", {
                   "stop-color": `var(${unref(ns).cssVarBlockName("fill-color-4")})`,
                   offset: "100%"
-                }, null, 8, _hoisted_4$a)
-              ], 8, _hoisted_2$r),
+                }, null, 8, _hoisted_4$c)
+              ], 8, _hoisted_2$t),
               createBaseVNode("linearGradient", {
                 id: `linearGradient-2-${unref(id)}`,
                 x1: "0%",
@@ -45094,42 +45307,42 @@ var require_index_001 = __commonJS({
                 createBaseVNode("stop", {
                   "stop-color": `var(${unref(ns).cssVarBlockName("fill-color-1")})`,
                   offset: "0%"
-                }, null, 8, _hoisted_6$5),
+                }, null, 8, _hoisted_6$7),
                 createBaseVNode("stop", {
                   "stop-color": `var(${unref(ns).cssVarBlockName("fill-color-6")})`,
                   offset: "100%"
-                }, null, 8, _hoisted_7$4)
-              ], 8, _hoisted_5$8),
+                }, null, 8, _hoisted_7$6)
+              ], 8, _hoisted_5$a),
               createBaseVNode("rect", {
                 id: `path-3-${unref(id)}`,
                 x: "0",
                 y: "0",
                 width: "17",
                 height: "36"
-              }, null, 8, _hoisted_8$4)
+              }, null, 8, _hoisted_8$6)
             ]),
-            createBaseVNode("g", _hoisted_9$4, [
-              createBaseVNode("g", _hoisted_10$4, [
-                createBaseVNode("g", _hoisted_11$4, [
+            createBaseVNode("g", _hoisted_9$6, [
+              createBaseVNode("g", _hoisted_10$6, [
+                createBaseVNode("g", _hoisted_11$6, [
                   createBaseVNode("path", {
                     d: "M39.5,86 C61.3152476,86 79,83.9106622 79,81.3333333 C79,78.7560045 57.3152476,78 35.5,78 C13.6847524,78 0,78.7560045 0,81.3333333 C0,83.9106622 17.6847524,86 39.5,86 Z",
                     fill: `var(${unref(ns).cssVarBlockName("fill-color-3")})`
-                  }, null, 8, _hoisted_12$2),
+                  }, null, 8, _hoisted_12$5),
                   createBaseVNode("polygon", {
                     fill: `var(${unref(ns).cssVarBlockName("fill-color-7")})`,
                     transform: "translate(27.500000, 51.500000) scale(1, -1) translate(-27.500000, -51.500000) ",
                     points: "13 58 53 58 42 45 2 45"
-                  }, null, 8, _hoisted_13$2),
-                  createBaseVNode("g", _hoisted_14$2, [
+                  }, null, 8, _hoisted_13$5),
+                  createBaseVNode("g", _hoisted_14$4, [
                     createBaseVNode("polygon", {
                       fill: `var(${unref(ns).cssVarBlockName("fill-color-7")})`,
                       transform: "translate(11.500000, 5.000000) scale(1, -1) translate(-11.500000, -5.000000) ",
                       points: "2.84078316e-14 3 18 3 23 7 5 7"
-                    }, null, 8, _hoisted_15$2),
+                    }, null, 8, _hoisted_15$4),
                     createBaseVNode("polygon", {
                       fill: `var(${unref(ns).cssVarBlockName("fill-color-5")})`,
                       points: "-3.69149156e-15 7 38 7 38 43 -3.69149156e-15 43"
-                    }, null, 8, _hoisted_16$2),
+                    }, null, 8, _hoisted_16$4),
                     createBaseVNode("rect", {
                       fill: `url(#linearGradient-1-${unref(id)})`,
                       transform: "translate(46.500000, 25.000000) scale(-1, 1) translate(-46.500000, -25.000000) ",
@@ -45137,12 +45350,12 @@ var require_index_001 = __commonJS({
                       y: "7",
                       width: "17",
                       height: "36"
-                    }, null, 8, _hoisted_17$2),
+                    }, null, 8, _hoisted_17$4),
                     createBaseVNode("polygon", {
                       fill: `var(${unref(ns).cssVarBlockName("fill-color-2")})`,
                       transform: "translate(39.500000, 3.500000) scale(-1, 1) translate(-39.500000, -3.500000) ",
                       points: "24 7 41 7 55 -3.63806207e-12 38 -3.63806207e-12"
-                    }, null, 8, _hoisted_18$2)
+                    }, null, 8, _hoisted_18$3)
                   ]),
                   createBaseVNode("rect", {
                     fill: `url(#linearGradient-2-${unref(id)})`,
@@ -45150,25 +45363,25 @@ var require_index_001 = __commonJS({
                     y: "45",
                     width: "40",
                     height: "36"
-                  }, null, 8, _hoisted_19$2),
-                  createBaseVNode("g", _hoisted_20$2, [
+                  }, null, 8, _hoisted_19$3),
+                  createBaseVNode("g", _hoisted_20$3, [
                     createBaseVNode("use", {
                       fill: `var(${unref(ns).cssVarBlockName("fill-color-8")})`,
                       transform: "translate(8.500000, 18.000000) scale(-1, 1) translate(-8.500000, -18.000000) ",
                       "xlink:href": `#path-3-${unref(id)}`
-                    }, null, 8, _hoisted_21$2),
+                    }, null, 8, _hoisted_21$3),
                     createBaseVNode("polygon", {
                       fill: `var(${unref(ns).cssVarBlockName("fill-color-9")})`,
                       mask: `url(#mask-4-${unref(id)})`,
                       transform: "translate(12.000000, 9.000000) scale(-1, 1) translate(-12.000000, -9.000000) ",
                       points: "7 0 24 0 20 18 7 16.5"
-                    }, null, 8, _hoisted_22$2)
+                    }, null, 8, _hoisted_22$3)
                   ]),
                   createBaseVNode("polygon", {
                     fill: `var(${unref(ns).cssVarBlockName("fill-color-2")})`,
                     transform: "translate(66.000000, 51.500000) scale(-1, 1) translate(-66.000000, -51.500000) ",
                     points: "62 45 79 45 70 58 53 58"
-                  }, null, 8, _hoisted_23$1)
+                  }, null, 8, _hoisted_23$2)
                 ])
               ])
             ])
@@ -45176,9 +45389,9 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$F = ["src"];
-    const _hoisted_2$q = { key: 1 };
-    var _sfc_main$1b = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$H = ["src"];
+    const _hoisted_2$s = { key: 1 };
+    var _sfc_main$1d = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElEmpty"
       },
@@ -45212,8 +45425,8 @@ var require_index_001 = __commonJS({
                     key: 0,
                     src: __props.image,
                     ondragstart: "return false"
-                  }, null, 8, _hoisted_1$F)) : renderSlot(_ctx.$slots, "image", { key: 1 }, () => [
-                    createVNode(_sfc_main$1c)
+                  }, null, 8, _hoisted_1$H)) : renderSlot(_ctx.$slots, "image", { key: 1 }, () => [
+                    createVNode(_sfc_main$1e)
                   ])
                 ],
                 6
@@ -45227,7 +45440,7 @@ var require_index_001 = __commonJS({
                 [
                   _ctx.$slots.description ? renderSlot(_ctx.$slots, "description", { key: 0 }) : (openBlock(), createElementBlock(
                     "p",
-                    _hoisted_2$q,
+                    _hoisted_2$s,
                     toDisplayString(emptyDescription.value),
                     1
                     /* TEXT */
@@ -45255,7 +45468,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElEmpty = withInstall(_sfc_main$1b);
+    const ElEmpty = withInstall(_sfc_main$1d);
     const formMetaProps = buildProps({
       /**
        * @description Control the size of components in this form.
@@ -45397,7 +45610,7 @@ var require_index_001 = __commonJS({
       ) : fields;
     };
     const COMPONENT_NAME$d = "ElForm";
-    var _sfc_main$1a = /* @__PURE__ */ defineComponent({
+    var _sfc_main$1c = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME$d
       },
@@ -46813,8 +47026,8 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$E = ["role", "aria-labelledby"];
-    var _sfc_main$19 = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$G = ["role", "aria-labelledby"];
+    var _sfc_main$1b = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElFormItem"
       },
@@ -47178,14 +47391,14 @@ var require_index_001 = __commonJS({
               6
               /* CLASS, STYLE */
             )
-          ], 10, _hoisted_1$E);
+          ], 10, _hoisted_1$G);
         };
       }
     });
-    const ElForm = withInstall(_sfc_main$1a, {
-      FormItem: _sfc_main$19
+    const ElForm = withInstall(_sfc_main$1c, {
+      FormItem: _sfc_main$1b
     });
-    const ElFormItem = withNoopInstall(_sfc_main$19);
+    const ElFormItem = withNoopInstall(_sfc_main$1b);
     const imageProps = buildProps({
       /**
        * @description when enabling preview, use this flag to control whether clicking on backdrop can exit preview mode.
@@ -47395,8 +47608,8 @@ var require_index_001 = __commonJS({
       switch: (index) => isNumber(index),
       rotate: (deg) => isNumber(deg)
     };
-    const _hoisted_1$D = ["src", "crossorigin"];
-    var _sfc_main$18 = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$F = ["src", "crossorigin"];
+    var _sfc_main$1a = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElImageViewer"
       },
@@ -47938,7 +48151,7 @@ var require_index_001 = __commonJS({
                                 onError: handleImgError,
                                 onMousedown: handleMouseDown,
                                 onTouchstart: handleTouchStart
-                              }, null, 46, _hoisted_1$D))
+                              }, null, 46, _hoisted_1$F))
                             ],
                             2
                             /* CLASS */
@@ -47963,10 +48176,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElImageViewer = withInstall(_sfc_main$18);
-    const _hoisted_1$C = ["src", "loading", "crossorigin"];
-    const _hoisted_2$p = { key: 0 };
-    var _sfc_main$17 = /* @__PURE__ */ defineComponent({
+    const ElImageViewer = withInstall(_sfc_main$1a);
+    const _hoisted_1$E = ["src", "loading", "crossorigin"];
+    const _hoisted_2$r = { key: 0 };
+    var _sfc_main$19 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElImage",
         inheritAttrs: false
@@ -48149,7 +48362,7 @@ var require_index_001 = __commonJS({
                     onClick: clickHandler,
                     onLoad: handleLoad,
                     onError: handleError2
-                  }), null, 16, _hoisted_1$C)) : createCommentVNode("v-if", true),
+                  }), null, 16, _hoisted_1$E)) : createCommentVNode("v-if", true),
                   isLoading.value ? (openBlock(), createElementBlock(
                     "div",
                     {
@@ -48202,7 +48415,7 @@ var require_index_001 = __commonJS({
                       renderSlot(_ctx.$slots, "toolbar", normalizeProps(guardReactiveProps(toolbar)))
                     ]),
                     default: withCtx(() => [
-                      _ctx.$slots.viewer ? (openBlock(), createElementBlock("div", _hoisted_2$p, [
+                      _ctx.$slots.viewer ? (openBlock(), createElementBlock("div", _hoisted_2$r, [
                         renderSlot(_ctx.$slots, "viewer")
                       ])) : createCommentVNode("v-if", true)
                     ]),
@@ -48235,7 +48448,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElImage = withInstall(_sfc_main$17);
+    const ElImage = withInstall(_sfc_main$19);
     const inputNumberProps = buildProps({
       /**
        * @description same as `id` in native input
@@ -48362,9 +48575,9 @@ var require_index_001 = __commonJS({
       [INPUT_EVENT]: (val) => isNumber(val) || isNil(val),
       [UPDATE_MODEL_EVENT]: (val) => isNumber(val) || isNil(val)
     };
-    const _hoisted_1$B = ["aria-label"];
-    const _hoisted_2$o = ["aria-label"];
-    var _sfc_main$16 = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$D = ["aria-label"];
+    const _hoisted_2$q = ["aria-label"];
+    var _sfc_main$18 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElInputNumber"
       },
@@ -48670,7 +48883,7 @@ var require_index_001 = __commonJS({
                     /* STABLE */
                   })
                 ])
-              ], 42, _hoisted_1$B)), [
+              ], 42, _hoisted_1$D)), [
                 [unref(vRepeatClick), decrease]
               ]) : createCommentVNode("v-if", true),
               __props.controls ? withDirectives((openBlock(), createElementBlock("span", {
@@ -48689,7 +48902,7 @@ var require_index_001 = __commonJS({
                     /* STABLE */
                   })
                 ])
-              ], 42, _hoisted_2$o)), [
+              ], 42, _hoisted_2$q)), [
                 [unref(vRepeatClick), increase]
               ]) : createCommentVNode("v-if", true),
               createVNode(unref(ElInput), {
@@ -48740,7 +48953,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElInputNumber = withInstall(_sfc_main$16);
+    const ElInputNumber = withInstall(_sfc_main$18);
     const inputTagProps = buildProps({
       /**
        * @description binding value
@@ -49301,9 +49514,9 @@ var require_index_001 = __commonJS({
         innerRef
       };
     }
-    const _hoisted_1$A = ["id", "minlength", "maxlength", "disabled", "readonly", "autocomplete", "tabindex", "placeholder", "autofocus", "ariaLabel"];
-    const _hoisted_2$n = ["textContent"];
-    var _sfc_main$15 = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$C = ["id", "minlength", "maxlength", "disabled", "readonly", "autocomplete", "tabindex", "placeholder", "autofocus", "ariaLabel"];
+    const _hoisted_2$p = ["textContent"];
+    var _sfc_main$17 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElInputTag",
         inheritAttrs: false
@@ -49585,7 +49798,7 @@ var require_index_001 = __commonJS({
                         (...args) => unref(handleKeydown) && unref(handleKeydown)(...args)),
                         onKeyup: _cache[8] || (_cache[8] = //@ts-ignore
                         (...args) => unref(handleKeyup) && unref(handleKeyup)(...args))
-                      }), null, 16, _hoisted_1$A), [
+                      }), null, 16, _hoisted_1$C), [
                         [vModelText, unref(inputValue)]
                       ]),
                       createBaseVNode("span", {
@@ -49594,7 +49807,7 @@ var require_index_001 = __commonJS({
                         "aria-hidden": "true",
                         class: normalizeClass(unref(ns).e("input-calculator")),
                         textContent: toDisplayString(unref(inputValue))
-                      }, null, 10, _hoisted_2$n)
+                      }, null, 10, _hoisted_2$p)
                     ],
                     2
                     /* CLASS */
@@ -49661,7 +49874,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElInputTag = withInstall(_sfc_main$15);
+    const ElInputTag = withInstall(_sfc_main$17);
     const linkProps = buildProps({
       /**
        * @description type
@@ -49704,8 +49917,8 @@ var require_index_001 = __commonJS({
     const linkEmits = {
       click: (evt) => evt instanceof MouseEvent
     };
-    const _hoisted_1$z = ["href", "target"];
-    var _sfc_main$14 = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$B = ["href", "target"];
+    var _sfc_main$16 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElLink"
       },
@@ -49773,11 +49986,11 @@ var require_index_001 = __commonJS({
               /* CLASS */
             )) : createCommentVNode("v-if", true),
             _ctx.$slots.icon ? renderSlot(_ctx.$slots, "icon", { key: 2 }) : createCommentVNode("v-if", true)
-          ], 10, _hoisted_1$z);
+          ], 10, _hoisted_1$B);
         };
       }
     });
-    const ElLink = withInstall(_sfc_main$14);
+    const ElLink = withInstall(_sfc_main$16);
     var __defProp$5 = Object.defineProperty;
     var __defNormalProp$5 = (obj, key, value) => key in obj ? __defProp$5(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
     var __publicField$5 = (obj, key, value) => __defNormalProp$5(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -49908,7 +50121,7 @@ var require_index_001 = __commonJS({
         });
       }
     };
-    var _sfc_main$13 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$15 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElMenuCollapseTransition"
       },
@@ -50824,7 +51037,7 @@ var require_index_001 = __commonJS({
             directives
           );
           if (props2.collapseTransition && props2.mode === "vertical") {
-            return h$1(_sfc_main$13, () => vMenu);
+            return h$1(_sfc_main$15, () => vMenu);
           }
           return vMenu;
         };
@@ -50855,7 +51068,7 @@ var require_index_001 = __commonJS({
       click: (item) => isString(item.index) && isArray$1(item.indexPath)
     };
     const COMPONENT_NAME$a = "ElMenuItem";
-    var _sfc_main$12 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$14 = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME$a
       },
@@ -50973,7 +51186,7 @@ var require_index_001 = __commonJS({
        */
       title: String
     };
-    var _sfc_main$11 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$13 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElMenuItemGroup"
       },
@@ -51022,12 +51235,12 @@ var require_index_001 = __commonJS({
       }
     });
     const ElMenu = withInstall(Menu, {
-      MenuItem: _sfc_main$12,
-      MenuItemGroup: _sfc_main$11,
+      MenuItem: _sfc_main$14,
+      MenuItemGroup: _sfc_main$13,
       SubMenu
     });
-    const ElMenuItem = withNoopInstall(_sfc_main$12);
-    const ElMenuItemGroup = withNoopInstall(_sfc_main$11);
+    const ElMenuItem = withNoopInstall(_sfc_main$14);
+    const ElMenuItemGroup = withNoopInstall(_sfc_main$13);
     const ElSubMenu = withNoopInstall(SubMenu);
     const pageHeaderProps = buildProps({
       /**
@@ -51052,8 +51265,8 @@ var require_index_001 = __commonJS({
     const pageHeaderEmits = {
       back: () => true
     };
-    const _hoisted_1$y = ["aria-label"];
-    var _sfc_main$10 = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$A = ["aria-label"];
+    var _sfc_main$12 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElPageHeader"
       },
@@ -51128,7 +51341,7 @@ var require_index_001 = __commonJS({
                                 /* STABLE */
                               })) : createCommentVNode("v-if", true)
                             ])
-                          ], 10, _hoisted_1$y)) : createCommentVNode("v-if", true),
+                          ], 10, _hoisted_1$A)) : createCommentVNode("v-if", true),
                           createBaseVNode(
                             "div",
                             {
@@ -51207,7 +51420,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElPageHeader = withInstall(_sfc_main$10);
+    const ElPageHeader = withInstall(_sfc_main$12);
     const elPaginationKey = /* @__PURE__ */ Symbol("elPaginationKey");
     const paginationPrevProps = buildProps({
       disabled: Boolean,
@@ -51225,9 +51438,9 @@ var require_index_001 = __commonJS({
     const paginationPrevEmits = {
       click: (evt) => evt instanceof MouseEvent
     };
-    const _hoisted_1$x = ["disabled", "aria-label", "aria-disabled"];
-    const _hoisted_2$m = { key: 0 };
-    var _sfc_main$$ = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$z = ["disabled", "aria-label", "aria-disabled"];
+    const _hoisted_2$o = { key: 0 };
+    var _sfc_main$11 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElPaginationPrev"
       },
@@ -51251,7 +51464,7 @@ var require_index_001 = __commonJS({
           }, [
             _ctx.prevText ? (openBlock(), createElementBlock(
               "span",
-              _hoisted_2$m,
+              _hoisted_2$o,
               toDisplayString(_ctx.prevText),
               1
               /* TEXT */
@@ -51262,7 +51475,7 @@ var require_index_001 = __commonJS({
               _: 1
               /* STABLE */
             }))
-          ], 8, _hoisted_1$x);
+          ], 8, _hoisted_1$z);
         };
       }
     });
@@ -51283,9 +51496,9 @@ var require_index_001 = __commonJS({
         type: iconPropType
       }
     });
-    const _hoisted_1$w = ["disabled", "aria-label", "aria-disabled"];
-    const _hoisted_2$l = { key: 0 };
-    var _sfc_main$_ = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$y = ["disabled", "aria-label", "aria-disabled"];
+    const _hoisted_2$n = { key: 0 };
+    var _sfc_main$10 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElPaginationNext"
       },
@@ -51309,7 +51522,7 @@ var require_index_001 = __commonJS({
           }, [
             _ctx.nextText ? (openBlock(), createElementBlock(
               "span",
-              _hoisted_2$l,
+              _hoisted_2$n,
               toDisplayString(_ctx.nextText),
               1
               /* TEXT */
@@ -51320,7 +51533,7 @@ var require_index_001 = __commonJS({
               _: 1
               /* STABLE */
             }))
-          ], 8, _hoisted_1$w);
+          ], 8, _hoisted_1$y);
         };
       }
     });
@@ -51348,7 +51561,7 @@ var require_index_001 = __commonJS({
       },
       appendSizeTo: String
     });
-    var _sfc_main$Z = /* @__PURE__ */ defineComponent({
+    var _sfc_main$$ = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElPaginationSizes"
       },
@@ -51435,8 +51648,8 @@ var require_index_001 = __commonJS({
         values: componentSizes
       }
     });
-    const _hoisted_1$v = ["disabled"];
-    var _sfc_main$Y = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$x = ["disabled"];
+    var _sfc_main$_ = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElPaginationJumper"
       },
@@ -51495,7 +51708,7 @@ var require_index_001 = __commonJS({
               3
               /* TEXT, CLASS */
             )
-          ], 10, _hoisted_1$v);
+          ], 10, _hoisted_1$x);
         };
       }
     });
@@ -51505,8 +51718,8 @@ var require_index_001 = __commonJS({
         default: 1e3
       }
     });
-    const _hoisted_1$u = ["disabled"];
-    var _sfc_main$X = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$w = ["disabled"];
+    var _sfc_main$Z = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElPaginationTotal"
       },
@@ -51522,7 +51735,7 @@ var require_index_001 = __commonJS({
             disabled: unref(disabled)
           }, toDisplayString(unref(t)("el.pagination.total", {
             total: _ctx.total
-          })), 11, _hoisted_1$u);
+          })), 11, _hoisted_1$w);
         };
       }
     });
@@ -51541,12 +51754,12 @@ var require_index_001 = __commonJS({
       },
       disabled: Boolean
     });
-    const _hoisted_1$t = ["aria-current", "aria-label", "tabindex"];
-    const _hoisted_2$k = ["tabindex", "aria-label"];
-    const _hoisted_3$b = ["aria-current", "aria-label", "tabindex"];
-    const _hoisted_4$9 = ["tabindex", "aria-label"];
-    const _hoisted_5$7 = ["aria-current", "aria-label", "tabindex"];
-    var _sfc_main$W = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$v = ["aria-current", "aria-label", "tabindex"];
+    const _hoisted_2$m = ["tabindex", "aria-label"];
+    const _hoisted_3$d = ["aria-current", "aria-label", "tabindex"];
+    const _hoisted_4$b = ["tabindex", "aria-label"];
+    const _hoisted_5$9 = ["aria-current", "aria-label", "tabindex"];
+    var _sfc_main$Y = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElPaginationPager"
       },
@@ -51704,7 +51917,7 @@ var require_index_001 = __commonJS({
                 "aria-current": _ctx.currentPage === 1,
                 "aria-label": unref(t)("el.pagination.currentPage", { pager: 1 }),
                 tabindex: tabindex.value
-              }, " 1 ", 10, _hoisted_1$t)) : createCommentVNode("v-if", true),
+              }, " 1 ", 10, _hoisted_1$v)) : createCommentVNode("v-if", true),
               showPrevMore.value ? (openBlock(), createElementBlock("li", {
                 key: 1,
                 class: normalizeClass(prevMoreKls.value),
@@ -51716,7 +51929,7 @@ var require_index_001 = __commonJS({
                 onBlur: _cache[3] || (_cache[3] = ($event) => quickPrevFocus.value = false)
               }, [
                 (quickPrevHover.value || quickPrevFocus.value) && !_ctx.disabled ? (openBlock(), createBlock(unref(d_arrow_left_default), { key: 0 })) : (openBlock(), createBlock(unref(more_filled_default), { key: 1 }))
-              ], 42, _hoisted_2$k)) : createCommentVNode("v-if", true),
+              ], 42, _hoisted_2$m)) : createCommentVNode("v-if", true),
               (openBlock(true), createElementBlock(
                 Fragment,
                 null,
@@ -51730,7 +51943,7 @@ var require_index_001 = __commonJS({
                     "aria-current": _ctx.currentPage === pager,
                     "aria-label": unref(t)("el.pagination.currentPage", { pager }),
                     tabindex: tabindex.value
-                  }, toDisplayString(pager), 11, _hoisted_3$b);
+                  }, toDisplayString(pager), 11, _hoisted_3$d);
                 }),
                 128
                 /* KEYED_FRAGMENT */
@@ -51746,7 +51959,7 @@ var require_index_001 = __commonJS({
                 onBlur: _cache[7] || (_cache[7] = ($event) => quickNextFocus.value = false)
               }, [
                 (quickNextHover.value || quickNextFocus.value) && !_ctx.disabled ? (openBlock(), createBlock(unref(d_arrow_right_default), { key: 0 })) : (openBlock(), createBlock(unref(more_filled_default), { key: 1 }))
-              ], 42, _hoisted_4$9)) : createCommentVNode("v-if", true),
+              ], 42, _hoisted_4$b)) : createCommentVNode("v-if", true),
               _ctx.pageCount > 1 ? (openBlock(), createElementBlock("li", {
                 key: 3,
                 class: normalizeClass([[
@@ -51756,7 +51969,7 @@ var require_index_001 = __commonJS({
                 "aria-current": _ctx.currentPage === _ctx.pageCount,
                 "aria-label": unref(t)("el.pagination.currentPage", { pager: _ctx.pageCount }),
                 tabindex: tabindex.value
-              }, toDisplayString(_ctx.pageCount), 11, _hoisted_5$7)) : createCommentVNode("v-if", true)
+              }, toDisplayString(_ctx.pageCount), 11, _hoisted_5$9)) : createCommentVNode("v-if", true)
             ],
             34
             /* CLASS, NEED_HYDRATION */
@@ -52050,24 +52263,24 @@ var require_index_001 = __commonJS({
             rightWrapperChildren
           );
           const TEMPLATE_MAP = {
-            prev: h$1(_sfc_main$$, {
+            prev: h$1(_sfc_main$11, {
               disabled: props2.disabled,
               currentPage: currentPageBridge.value,
               prevText: props2.prevText,
               prevIcon: props2.prevIcon,
               onClick: prev
             }),
-            jumper: h$1(_sfc_main$Y, {
+            jumper: h$1(_sfc_main$_, {
               size: _size.value
             }),
-            pager: h$1(_sfc_main$W, {
+            pager: h$1(_sfc_main$Y, {
               currentPage: currentPageBridge.value,
               pageCount: pageCountBridge.value,
               pagerCount: props2.pagerCount,
               onChange: handleCurrentChange2,
               disabled: props2.disabled
             }),
-            next: h$1(_sfc_main$_, {
+            next: h$1(_sfc_main$10, {
               disabled: props2.disabled,
               currentPage: currentPageBridge.value,
               pageCount: pageCountBridge.value,
@@ -52075,7 +52288,7 @@ var require_index_001 = __commonJS({
               nextIcon: props2.nextIcon,
               onClick: next
             }),
-            sizes: h$1(_sfc_main$Z, {
+            sizes: h$1(_sfc_main$$, {
               pageSize: pageSizeBridge.value,
               pageSizes: props2.pageSizes,
               popperClass: props2.popperClass,
@@ -52086,7 +52299,7 @@ var require_index_001 = __commonJS({
               appendSizeTo: props2.appendSizeTo
             }),
             slot: (_b = (_a = slots == null ? void 0 : slots.default) == null ? void 0 : _a.call(slots)) != null ? _b : null,
-            total: h$1(_sfc_main$X, { total: isAbsent(props2.total) ? 0 : props2.total })
+            total: h$1(_sfc_main$Z, { total: isAbsent(props2.total) ? 0 : props2.total })
           };
           const components = props2.layout.split(",").map((item) => item.trim());
           let haveRightWrapper = false;
@@ -52215,7 +52428,7 @@ var require_index_001 = __commonJS({
        */
       cancel: (e) => e instanceof MouseEvent
     };
-    var _sfc_main$V = /* @__PURE__ */ defineComponent({
+    var _sfc_main$X = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElPopconfirm"
       },
@@ -52379,7 +52592,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElPopconfirm = withInstall(_sfc_main$V);
+    const ElPopconfirm = withInstall(_sfc_main$X);
     const popoverProps = buildProps({
       /**
        * @description how the popover is triggered, not valid in controlled mode
@@ -52509,7 +52722,7 @@ var require_index_001 = __commonJS({
       "after-leave": () => true
     };
     const updateEventKeyRaw = `onUpdate:visible`;
-    var _sfc_main$U = /* @__PURE__ */ defineComponent({
+    var _sfc_main$W = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElPopover"
       },
@@ -52645,7 +52858,7 @@ var require_index_001 = __commonJS({
     };
     const VPopover = "popover";
     const ElPopoverDirective = withInstallDirective(PopoverDirective, VPopover);
-    const ElPopover = withInstall(_sfc_main$U, {
+    const ElPopover = withInstall(_sfc_main$W, {
       directive: ElPopoverDirective
     });
     const progressProps = buildProps({
@@ -52743,12 +52956,12 @@ var require_index_001 = __commonJS({
         default: (percentage) => `${percentage}%`
       }
     });
-    const _hoisted_1$s = ["aria-valuenow"];
-    const _hoisted_2$j = { viewBox: "0 0 100 100" };
-    const _hoisted_3$a = ["d", "stroke", "stroke-linecap", "stroke-width"];
-    const _hoisted_4$8 = ["d", "stroke", "opacity", "stroke-linecap", "stroke-width"];
-    const _hoisted_5$6 = { key: 0 };
-    var _sfc_main$T = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$u = ["aria-valuenow"];
+    const _hoisted_2$l = { viewBox: "0 0 100 100" };
+    const _hoisted_3$c = ["d", "stroke", "stroke-linecap", "stroke-width"];
+    const _hoisted_4$a = ["d", "stroke", "opacity", "stroke-linecap", "stroke-width"];
+    const _hoisted_5$8 = { key: 0 };
+    var _sfc_main$V = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElProgress"
       },
@@ -52945,7 +53158,7 @@ var require_index_001 = __commonJS({
                 style: normalizeStyle({ height: `${__props.width}px`, width: `${__props.width}px` })
               },
               [
-                (openBlock(), createElementBlock("svg", _hoisted_2$j, [
+                (openBlock(), createElementBlock("svg", _hoisted_2$l, [
                   createBaseVNode("path", {
                     class: normalizeClass(unref(ns).be("circle", "track")),
                     d: trackPath.value,
@@ -52954,7 +53167,7 @@ var require_index_001 = __commonJS({
                     "stroke-width": relativeStrokeWidth.value,
                     fill: "none",
                     style: normalizeStyle(trailPathStyle.value)
-                  }, null, 14, _hoisted_3$a),
+                  }, null, 14, _hoisted_3$c),
                   createBaseVNode("path", {
                     class: normalizeClass(unref(ns).be("circle", "path")),
                     d: trackPath.value,
@@ -52964,7 +53177,7 @@ var require_index_001 = __commonJS({
                     "stroke-linecap": __props.strokeLinecap,
                     "stroke-width": relativeStrokeWidth.value,
                     style: normalizeStyle(circlePathStyle.value)
-                  }, null, 14, _hoisted_4$8)
+                  }, null, 14, _hoisted_4$a)
                 ]))
               ],
               6
@@ -52981,7 +53194,7 @@ var require_index_001 = __commonJS({
                 renderSlot(_ctx.$slots, "default", { percentage: __props.percentage }, () => [
                   !__props.status ? (openBlock(), createElementBlock(
                     "span",
-                    _hoisted_5$6,
+                    _hoisted_5$8,
                     toDisplayString(content.value),
                     1
                     /* TEXT */
@@ -52997,11 +53210,11 @@ var require_index_001 = __commonJS({
               6
               /* CLASS, STYLE */
             )) : createCommentVNode("v-if", true)
-          ], 10, _hoisted_1$s);
+          ], 10, _hoisted_1$u);
         };
       }
     });
-    const ElProgress = withInstall(_sfc_main$T);
+    const ElProgress = withInstall(_sfc_main$V);
     const rateProps = buildProps({
       /**
        * @description binding value
@@ -53140,9 +53353,9 @@ var require_index_001 = __commonJS({
       [CHANGE_EVENT]: (value) => isNumber(value),
       [UPDATE_MODEL_EVENT]: (value) => isNumber(value)
     };
-    const _hoisted_1$r = ["id", "aria-label", "aria-labelledby", "aria-valuenow", "aria-valuetext", "aria-valuemax", "tabindex", "aria-disabled"];
-    const _hoisted_2$i = ["onMousemove", "onClick"];
-    var _sfc_main$S = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$t = ["id", "aria-label", "aria-labelledby", "aria-valuenow", "aria-valuetext", "aria-valuemax", "tabindex", "aria-disabled"];
+    const _hoisted_2$k = ["onMousemove", "onClick"];
+    var _sfc_main$U = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElRate"
       },
@@ -53411,7 +53624,7 @@ var require_index_001 = __commonJS({
                     _: 2
                     /* DYNAMIC */
                   }, 1032, ["class"])
-                ], 42, _hoisted_2$i);
+                ], 42, _hoisted_2$k);
               }),
               128
               /* KEYED_FRAGMENT */
@@ -53427,11 +53640,11 @@ var require_index_001 = __commonJS({
               7
               /* TEXT, CLASS, STYLE */
             )) : createCommentVNode("v-if", true)
-          ], 46, _hoisted_1$r);
+          ], 46, _hoisted_1$t);
         };
       }
     });
-    const ElRate = withInstall(_sfc_main$S);
+    const ElRate = withInstall(_sfc_main$U);
     const IconMap = {
       primary: "icon-primary",
       success: "icon-success",
@@ -53470,7 +53683,7 @@ var require_index_001 = __commonJS({
         default: "info"
       }
     });
-    var _sfc_main$R = /* @__PURE__ */ defineComponent({
+    var _sfc_main$T = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElResult"
       },
@@ -53570,7 +53783,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElResult = withInstall(_sfc_main$R);
+    const ElResult = withInstall(_sfc_main$T);
     const RowJustify = [
       "start",
       "center",
@@ -53611,7 +53824,7 @@ var require_index_001 = __commonJS({
         values: RowAlign
       }
     });
-    var _sfc_main$Q = /* @__PURE__ */ defineComponent({
+    var _sfc_main$S = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElRow"
       },
@@ -53651,8 +53864,8 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElRow = withInstall(_sfc_main$Q);
-    var _sfc_main$P = /* @__PURE__ */ defineComponent({
+    const ElRow = withInstall(_sfc_main$S);
+    var _sfc_main$R = /* @__PURE__ */ defineComponent({
       props: {
         item: {
           type: Object,
@@ -53682,7 +53895,7 @@ var require_index_001 = __commonJS({
         /* TEXT, CLASS, STYLE */
       );
     }
-    var GroupItem = /* @__PURE__ */ _export_sfc$1(_sfc_main$P, [["render", _sfc_render$7]]);
+    var GroupItem = /* @__PURE__ */ _export_sfc$1(_sfc_main$R, [["render", _sfc_render$7]]);
     function useOption(props2, { emit: emit2 }) {
       return {
         hoverItem: () => {
@@ -54030,7 +54243,7 @@ var require_index_001 = __commonJS({
     const selectV2InjectionKey = /* @__PURE__ */ Symbol(
       "ElSelectV2Injection"
     );
-    var _sfc_main$O = /* @__PURE__ */ defineComponent({
+    var _sfc_main$Q = /* @__PURE__ */ defineComponent({
       props: optionV2Props,
       emits: optionV2Emits,
       setup(props2, { emit: emit2 }) {
@@ -54048,7 +54261,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$q = ["id", "aria-selected", "aria-disabled"];
+    const _hoisted_1$s = ["id", "aria-selected", "aria-disabled"];
     function _sfc_render$6(_ctx, _cache, $props, $setup, $data, $options) {
       return openBlock(), createElementBlock("li", {
         id: `${_ctx.contentId}-${_ctx.index}`,
@@ -54079,9 +54292,9 @@ var require_index_001 = __commonJS({
             /* TEXT */
           )
         ])
-      ], 46, _hoisted_1$q);
+      ], 46, _hoisted_1$s);
     }
-    var OptionItem = /* @__PURE__ */ _export_sfc$1(_sfc_main$O, [["render", _sfc_render$6]]);
+    var OptionItem = /* @__PURE__ */ _export_sfc$1(_sfc_main$Q, [["render", _sfc_render$6]]);
     var safeIsNaN = Number.isNaN || function ponyfill(value) {
       return typeof value === "number" && value !== value;
     };
@@ -56322,7 +56535,7 @@ var require_index_001 = __commonJS({
         handleCompositionUpdate
       };
     };
-    var _sfc_main$N = /* @__PURE__ */ defineComponent({
+    var _sfc_main$P = /* @__PURE__ */ defineComponent({
       name: "ElSelectV2",
       components: {
         ElSelectMenu,
@@ -56382,9 +56595,9 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$p = ["id", "value", "autocomplete", "tabindex", "aria-expanded", "aria-label", "disabled", "aria-controls", "aria-activedescendant", "readonly", "name"];
-    const _hoisted_2$h = ["textContent"];
-    const _hoisted_3$9 = { key: 1 };
+    const _hoisted_1$r = ["id", "value", "autocomplete", "tabindex", "aria-expanded", "aria-label", "disabled", "aria-controls", "aria-activedescendant", "readonly", "name"];
+    const _hoisted_2$j = ["textContent"];
+    const _hoisted_3$b = { key: 1 };
     function _sfc_render$5(_ctx, _cache, $props, $setup, $data, $options) {
       const _component_el_tag = resolveComponent("el-tag");
       const _component_el_tooltip = resolveComponent("el-tooltip");
@@ -56705,14 +56918,14 @@ var require_index_001 = __commonJS({
                                 _cache[9] || (_cache[9] = withKeys(withModifiers((...args) => _ctx.handleDel && _ctx.handleDel(...args), ["stop"]), ["delete"]))
                               ],
                               onClick: _cache[10] || (_cache[10] = withModifiers((...args) => _ctx.toggleMenu && _ctx.toggleMenu(...args), ["stop"]))
-                            }, null, 46, _hoisted_1$p),
+                            }, null, 46, _hoisted_1$r),
                             _ctx.filterable ? (openBlock(), createElementBlock("span", {
                               key: 0,
                               ref: "calculatorRef",
                               "aria-hidden": "true",
                               class: normalizeClass(_ctx.nsSelect.e("input-calculator")),
                               textContent: toDisplayString(_ctx.states.inputValue)
-                            }, null, 10, _hoisted_2$h)) : createCommentVNode("v-if", true)
+                            }, null, 10, _hoisted_2$j)) : createCommentVNode("v-if", true)
                           ],
                           2
                           /* CLASS */
@@ -56746,7 +56959,7 @@ var require_index_001 = __commonJS({
                               )
                             ]) : (openBlock(), createElementBlock(
                               "span",
-                              _hoisted_3$9,
+                              _hoisted_3$b,
                               toDisplayString(_ctx.currentPlaceholder),
                               1
                               /* TEXT */
@@ -56924,7 +57137,7 @@ var require_index_001 = __commonJS({
         [_directive_click_outside, _ctx.handleClickOutside, _ctx.popperRef]
       ]);
     }
-    var Select = /* @__PURE__ */ _export_sfc$1(_sfc_main$N, [["render", _sfc_render$5]]);
+    var Select = /* @__PURE__ */ _export_sfc$1(_sfc_main$P, [["render", _sfc_render$5]]);
     const ElSelectV2 = withInstall(Select);
     const skeletonProps = buildProps({
       /**
@@ -56979,7 +57192,7 @@ var require_index_001 = __commonJS({
         default: "text"
       }
     });
-    var _sfc_main$M = /* @__PURE__ */ defineComponent({
+    var _sfc_main$O = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElSkeletonItem"
       },
@@ -57043,7 +57256,7 @@ var require_index_001 = __commonJS({
       );
       return throttled;
     };
-    var _sfc_main$L = /* @__PURE__ */ defineComponent({
+    var _sfc_main$N = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElSkeleton"
       },
@@ -57074,7 +57287,7 @@ var require_index_001 = __commonJS({
                     { key: i },
                     [
                       unref(uiLoading) ? renderSlot(_ctx.$slots, "template", { key: i }, () => [
-                        createVNode(_sfc_main$M, {
+                        createVNode(_sfc_main$O, {
                           class: normalizeClass(unref(ns).is("first")),
                           variant: "p"
                         }, null, 8, ["class"]),
@@ -57082,7 +57295,7 @@ var require_index_001 = __commonJS({
                           Fragment,
                           null,
                           renderList(__props.rows, (item) => {
-                            return openBlock(), createBlock(_sfc_main$M, {
+                            return openBlock(), createBlock(_sfc_main$O, {
                               key: item,
                               class: normalizeClass([
                                 unref(ns).e("paragraph"),
@@ -57110,10 +57323,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElSkeleton = withInstall(_sfc_main$L, {
-      SkeletonItem: _sfc_main$M
+    const ElSkeleton = withInstall(_sfc_main$N, {
+      SkeletonItem: _sfc_main$O
     });
-    const ElSkeletonItem = withNoopInstall(_sfc_main$M);
+    const ElSkeletonItem = withNoopInstall(_sfc_main$O);
     const sliderContextKey = /* @__PURE__ */ Symbol("sliderContextKey");
     const sliderProps = buildProps({
       /**
@@ -57523,8 +57736,8 @@ var require_index_001 = __commonJS({
         setPosition
       };
     };
-    const _hoisted_1$o = ["tabindex"];
-    var _sfc_main$K = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$q = ["tabindex"];
+    var _sfc_main$M = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElSliderButton"
       },
@@ -57627,7 +57840,7 @@ var require_index_001 = __commonJS({
               _: 1
               /* STABLE */
             }, 8, ["visible", "placement", "popper-class", "disabled", "persistent"])
-          ], 46, _hoisted_1$o);
+          ], 46, _hoisted_1$q);
         };
       }
     });
@@ -57961,9 +58174,9 @@ var require_index_001 = __commonJS({
         sliderWrapper
       };
     };
-    const _hoisted_1$n = ["id", "role", "aria-label", "aria-labelledby"];
-    const _hoisted_2$g = { key: 1 };
-    var _sfc_main$J = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$p = ["id", "role", "aria-label", "aria-labelledby"];
+    const _hoisted_2$i = { key: 1 };
+    var _sfc_main$L = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElSlider"
       },
@@ -58107,7 +58320,7 @@ var require_index_001 = __commonJS({
                   6
                   /* CLASS, STYLE */
                 ),
-                createVNode(_sfc_main$K, {
+                createVNode(_sfc_main$M, {
                   id: !_ctx.range ? unref(inputId) : void 0,
                   ref_key: "firstButton",
                   ref: firstButton,
@@ -58126,7 +58339,7 @@ var require_index_001 = __commonJS({
                   "aria-disabled": unref(sliderDisabled),
                   "onUpdate:modelValue": unref(setFirstValue)
                 }, null, 8, ["id", "model-value", "vertical", "tooltip-class", "placement", "aria-label", "aria-labelledby", "aria-valuemin", "aria-valuemax", "aria-valuenow", "aria-valuetext", "aria-orientation", "aria-disabled", "onUpdate:modelValue"]),
-                _ctx.range ? (openBlock(), createBlock(_sfc_main$K, {
+                _ctx.range ? (openBlock(), createBlock(_sfc_main$M, {
                   key: 0,
                   ref_key: "secondButton",
                   ref: secondButton,
@@ -58144,7 +58357,7 @@ var require_index_001 = __commonJS({
                   "aria-disabled": unref(sliderDisabled),
                   "onUpdate:modelValue": unref(setSecondValue)
                 }, null, 8, ["model-value", "vertical", "tooltip-class", "placement", "aria-label", "aria-valuemin", "aria-valuemax", "aria-valuenow", "aria-valuetext", "aria-orientation", "aria-disabled", "onUpdate:modelValue"])) : createCommentVNode("v-if", true),
-                _ctx.showStops ? (openBlock(), createElementBlock("div", _hoisted_2$g, [
+                _ctx.showStops ? (openBlock(), createElementBlock("div", _hoisted_2$i, [
                   (openBlock(true), createElementBlock(
                     Fragment,
                     null,
@@ -58237,11 +58450,11 @@ var require_index_001 = __commonJS({
               "onUpdate:modelValue": unref(setFirstValue),
               onChange: unref(emitChange)
             }, null, 8, ["model-value", "class", "step", "disabled", "controls", "min", "max", "precision", "size", "onUpdate:modelValue", "onChange"])) : createCommentVNode("v-if", true)
-          ], 10, _hoisted_1$n);
+          ], 10, _hoisted_1$p);
         };
       }
     });
-    const ElSlider = withInstall(_sfc_main$J);
+    const ElSlider = withInstall(_sfc_main$L);
     const spaceItemProps = buildProps({
       prefixCls: {
         type: String
@@ -58555,7 +58768,7 @@ var require_index_001 = __commonJS({
         type: definePropType([String, Object, Array])
       }
     });
-    var _sfc_main$I = /* @__PURE__ */ defineComponent({
+    var _sfc_main$K = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElStatistic"
       },
@@ -58671,7 +58884,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElStatistic = withInstall(_sfc_main$I);
+    const ElStatistic = withInstall(_sfc_main$K);
     const countdownProps = buildProps({
       /**
        * @description Formatting the countdown display
@@ -58746,7 +58959,7 @@ var require_index_001 = __commonJS({
       }, format2);
       return replacedText.replace(escapeRegex, "$1");
     };
-    var _sfc_main$H = /* @__PURE__ */ defineComponent({
+    var _sfc_main$J = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElCountdown"
       },
@@ -58828,7 +59041,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElCountdown = withInstall(_sfc_main$H);
+    const ElCountdown = withInstall(_sfc_main$J);
     const stepsProps = buildProps({
       /**
        * @description the spacing of each step, will be responsive if omitted. Supports percentage.
@@ -58885,7 +59098,7 @@ var require_index_001 = __commonJS({
       [CHANGE_EVENT]: (newVal, oldVal) => [newVal, oldVal].every(isNumber)
     };
     const STEPS_INJECTION_KEY = "ElSteps";
-    var _sfc_main$G = /* @__PURE__ */ defineComponent({
+    var _sfc_main$I = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElSteps"
       },
@@ -58960,7 +59173,7 @@ var require_index_001 = __commonJS({
         default: ""
       }
     });
-    var _sfc_main$F = /* @__PURE__ */ defineComponent({
+    var _sfc_main$H = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElStep"
       },
@@ -59223,10 +59436,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElSteps = withInstall(_sfc_main$G, {
-      Step: _sfc_main$F
+    const ElSteps = withInstall(_sfc_main$I, {
+      Step: _sfc_main$H
     });
-    const ElStep = withNoopInstall(_sfc_main$F);
+    const ElStep = withNoopInstall(_sfc_main$H);
     const isValidComponentSize = (val) => ["", ...componentSizes].includes(val);
     const switchProps = buildProps({
       /**
@@ -59354,13 +59567,13 @@ var require_index_001 = __commonJS({
       [CHANGE_EVENT]: (val) => isBoolean(val) || isString(val) || isNumber(val),
       [INPUT_EVENT]: (val) => isBoolean(val) || isString(val) || isNumber(val)
     };
-    const _hoisted_1$m = ["id", "aria-checked", "aria-disabled", "aria-label", "name", "true-value", "false-value", "disabled", "tabindex"];
-    const _hoisted_2$f = ["aria-hidden"];
-    const _hoisted_3$8 = { key: 1 };
-    const _hoisted_4$7 = { key: 1 };
-    const _hoisted_5$5 = ["aria-hidden"];
+    const _hoisted_1$o = ["id", "aria-checked", "aria-disabled", "aria-label", "name", "true-value", "false-value", "disabled", "tabindex"];
+    const _hoisted_2$h = ["aria-hidden"];
+    const _hoisted_3$a = { key: 1 };
+    const _hoisted_4$9 = { key: 1 };
+    const _hoisted_5$7 = ["aria-hidden"];
     const COMPONENT_NAME$9 = "ElSwitch";
-    var _sfc_main$E = /* @__PURE__ */ defineComponent({
+    var _sfc_main$G = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME$9
       },
@@ -59507,7 +59720,7 @@ var require_index_001 = __commonJS({
                 tabindex: __props.tabindex,
                 onChange: handleChange,
                 onKeydown: withKeys(switchValue, ["enter"])
-              }, null, 42, _hoisted_1$m),
+              }, null, 42, _hoisted_1$o),
               !__props.inlinePrompt && (__props.inactiveIcon || __props.inactiveText || _ctx.$slots.inactive) ? (openBlock(), createElementBlock(
                 "span",
                 {
@@ -59526,7 +59739,7 @@ var require_index_001 = __commonJS({
                     !__props.inactiveIcon && __props.inactiveText ? (openBlock(), createElementBlock("span", {
                       key: 1,
                       "aria-hidden": checked.value
-                    }, toDisplayString(__props.inactiveText), 9, _hoisted_2$f)) : createCommentVNode("v-if", true)
+                    }, toDisplayString(__props.inactiveText), 9, _hoisted_2$h)) : createCommentVNode("v-if", true)
                   ])
                 ],
                 2
@@ -59563,7 +59776,7 @@ var require_index_001 = __commonJS({
                             })) : createCommentVNode("v-if", true),
                             !__props.inactiveIcon && __props.inactiveText ? (openBlock(), createElementBlock(
                               "span",
-                              _hoisted_3$8,
+                              _hoisted_3$a,
                               toDisplayString(__props.inactiveText),
                               1
                               /* TEXT */
@@ -59589,7 +59802,7 @@ var require_index_001 = __commonJS({
                             })) : createCommentVNode("v-if", true),
                             !__props.activeIcon && __props.activeText ? (openBlock(), createElementBlock(
                               "span",
-                              _hoisted_4$7,
+                              _hoisted_4$9,
                               toDisplayString(__props.activeText),
                               1
                               /* TEXT */
@@ -59661,7 +59874,7 @@ var require_index_001 = __commonJS({
                     !__props.activeIcon && __props.activeText ? (openBlock(), createElementBlock("span", {
                       key: 1,
                       "aria-hidden": !checked.value
-                    }, toDisplayString(__props.activeText), 9, _hoisted_5$5)) : createCommentVNode("v-if", true)
+                    }, toDisplayString(__props.activeText), 9, _hoisted_5$7)) : createCommentVNode("v-if", true)
                   ])
                 ],
                 2
@@ -59674,7 +59887,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElSwitch = withInstall(_sfc_main$E);
+    const ElSwitch = withInstall(_sfc_main$G);
     const getCell = function(event) {
       var _a;
       return (_a = event.target) == null ? void 0 : _a.closest("td");
@@ -59757,11 +59970,11 @@ var require_index_001 = __commonJS({
       return column;
     };
     const getColumnByCell = function(table, cell, namespace) {
-      const matches = (cell.className || "").match(
+      const matches2 = (cell.className || "").match(
         new RegExp(`${namespace}-table_[^\\s]+`, "gm")
       );
-      if (matches) {
-        return getColumnById(table, matches[0]);
+      if (matches2) {
+        return getColumnById(table, matches2[0]);
       }
       return null;
     };
@@ -61449,7 +61662,7 @@ var require_index_001 = __commonJS({
         });
       }
     }
-    var _sfc_main$D = /* @__PURE__ */ defineComponent({
+    var _sfc_main$F = /* @__PURE__ */ defineComponent({
       name: "ElTableFilterPanel",
       components: {
         ElCheckbox,
@@ -61649,10 +61862,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$l = ["disabled"];
-    const _hoisted_2$e = ["tabindex", "aria-checked"];
-    const _hoisted_3$7 = ["tabindex", "aria-checked", "onClick"];
-    const _hoisted_4$6 = ["aria-label"];
+    const _hoisted_1$n = ["disabled"];
+    const _hoisted_2$g = ["tabindex", "aria-checked"];
+    const _hoisted_3$9 = ["tabindex", "aria-checked", "onClick"];
+    const _hoisted_4$8 = ["aria-label"];
     function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
       const _component_el_checkbox = resolveComponent("el-checkbox");
       const _component_el_checkbox_group = resolveComponent("el-checkbox-group");
@@ -61749,7 +61962,7 @@ var require_index_001 = __commonJS({
                     disabled: _ctx.filteredValue.length === 0,
                     type: "button",
                     onClick: _cache[1] || (_cache[1] = (...args) => _ctx.handleConfirm && _ctx.handleConfirm(...args))
-                  }, toDisplayString(_ctx.t("el.table.confirmFilter")), 11, _hoisted_1$l),
+                  }, toDisplayString(_ctx.t("el.table.confirmFilter")), 11, _hoisted_1$n),
                   createBaseVNode(
                     "button",
                     {
@@ -61787,7 +62000,7 @@ var require_index_001 = __commonJS({
                 tabindex: _ctx.checkedIndex === 0 ? 0 : -1,
                 "aria-checked": _ctx.isPropAbsent(_ctx.filterValue),
                 onClick: _cache[3] || (_cache[3] = ($event) => _ctx.handleSelect(null, 0))
-              }, toDisplayString(_ctx.t("el.table.clearFilter")), 11, _hoisted_2$e),
+              }, toDisplayString(_ctx.t("el.table.clearFilter")), 11, _hoisted_2$g),
               (openBlock(true), createElementBlock(
                 Fragment,
                 null,
@@ -61799,7 +62012,7 @@ var require_index_001 = __commonJS({
                     tabindex: _ctx.checkedIndex === idx + 1 ? 0 : -1,
                     "aria-checked": _ctx.isActive(filter),
                     onClick: ($event) => _ctx.handleSelect(filter.value, idx + 1)
-                  }, toDisplayString(filter.text), 11, _hoisted_3$7);
+                  }, toDisplayString(filter.text), 11, _hoisted_3$9);
                 }),
                 128
                 /* KEYED_FRAGMENT */
@@ -61829,14 +62042,14 @@ var require_index_001 = __commonJS({
                 _: 3
                 /* FORWARDED */
               })
-            ], 10, _hoisted_4$6)
+            ], 10, _hoisted_4$8)
           ];
         }),
         _: 3
         /* FORWARDED */
       }, 8, ["placement", "popper-class", "append-to", "onShow", "onHide"]);
     }
-    var FilterPanel = /* @__PURE__ */ _export_sfc$1(_sfc_main$D, [["render", _sfc_render$4]]);
+    var FilterPanel = /* @__PURE__ */ _export_sfc$1(_sfc_main$F, [["render", _sfc_render$4]]);
     function useLayoutObserver(root2) {
       const instance = getCurrentInstance();
       onBeforeMount(() => {
@@ -62784,8 +62997,8 @@ var require_index_001 = __commonJS({
         getColspanRealWidth
       };
     }
-    const _hoisted_1$k = ["colspan", "rowspan"];
-    var _sfc_main$C = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$m = ["colspan", "rowspan"];
+    var _sfc_main$E = /* @__PURE__ */ defineComponent({
       ...{
         name: "TableTdWrapper"
       },
@@ -62807,7 +63020,7 @@ var require_index_001 = __commonJS({
             rowspan: __props.rowspan
           }, [
             renderSlot(_ctx.$slots, "default")
-          ], 8, _hoisted_1$k);
+          ], 8, _hoisted_1$m);
         };
       }
     });
@@ -62922,7 +63135,7 @@ var require_index_001 = __commonJS({
               column.showOverflowTooltip
             );
             return h$1(
-              _sfc_main$C,
+              _sfc_main$E,
               {
                 style: getCellStyle($index, cellIndex, row, column),
                 class: getCellClass($index, cellIndex, row, column, colspan - 1),
@@ -64062,7 +64275,7 @@ var require_index_001 = __commonJS({
       }
     };
     let tableIdSeed = 1;
-    var _sfc_main$B = /* @__PURE__ */ defineComponent({
+    var _sfc_main$D = /* @__PURE__ */ defineComponent({
       name: "ElTable",
       directives: {
         Mousewheel
@@ -64274,8 +64487,8 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$j = ["data-prefix"];
-    const _hoisted_2$d = {
+    const _hoisted_1$l = ["data-prefix"];
+    const _hoisted_2$f = {
       ref: "hiddenColumns",
       class: "hidden-columns"
     };
@@ -64320,7 +64533,7 @@ var require_index_001 = __commonJS({
           [
             createBaseVNode(
               "div",
-              _hoisted_2$d,
+              _hoisted_2$f,
               [
                 renderSlot(_ctx.$slots, "default")
               ],
@@ -64554,9 +64767,9 @@ var require_index_001 = __commonJS({
         ), [
           [vShow, _ctx.resizeProxyVisible]
         ])
-      ], 46, _hoisted_1$j);
+      ], 46, _hoisted_1$l);
     }
-    var Table = /* @__PURE__ */ _export_sfc$1(_sfc_main$B, [["render", _sfc_render$3]]);
+    var Table = /* @__PURE__ */ _export_sfc$1(_sfc_main$D, [["render", _sfc_render$3]]);
     const defaultClassNames = {
       selection: "table-column--selection",
       expand: "table__expand-column"
@@ -68695,7 +68908,7 @@ var require_index_001 = __commonJS({
       }
     });
     const COMPONENT_NAME$4 = "ElTabBar";
-    var _sfc_main$A = /* @__PURE__ */ defineComponent({
+    var _sfc_main$C = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME$4
       },
@@ -69074,7 +69287,7 @@ var require_index_001 = __commonJS({
             "role": "tablist",
             "onKeydown": changeTab,
             "onWheel": onWheel
-          }, [...[!props2.type ? createVNode(_sfc_main$A, {
+          }, [...[!props2.type ? createVNode(_sfc_main$C, {
             "ref": tabBarRef,
             "tabs": [...props2.panes],
             "tabRefs": tabRefsMap.value
@@ -69314,9 +69527,9 @@ var require_index_001 = __commonJS({
        */
       lazy: Boolean
     });
-    const _hoisted_1$i = ["id", "aria-hidden", "aria-labelledby"];
+    const _hoisted_1$k = ["id", "aria-hidden", "aria-labelledby"];
     const COMPONENT_NAME$2 = "ElTabPane";
-    var _sfc_main$z = /* @__PURE__ */ defineComponent({
+    var _sfc_main$B = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME$2
       },
@@ -69388,16 +69601,16 @@ var require_index_001 = __commonJS({
             "aria-labelledby": `tab-${paneName.value}`
           }, [
             renderSlot(_ctx.$slots, "default")
-          ], 10, _hoisted_1$i)), [
+          ], 10, _hoisted_1$k)), [
             [vShow, active.value]
           ]) : createCommentVNode("v-if", true);
         };
       }
     });
     const ElTabs = withInstall(Tabs, {
-      TabPane: _sfc_main$z
+      TabPane: _sfc_main$B
     });
-    const ElTabPane = withNoopInstall(_sfc_main$z);
+    const ElTabPane = withNoopInstall(_sfc_main$B);
     const textProps = buildProps({
       /**
        * @description text type
@@ -69433,7 +69646,7 @@ var require_index_001 = __commonJS({
         default: "span"
       }
     });
-    var _sfc_main$y = /* @__PURE__ */ defineComponent({
+    var _sfc_main$A = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElText"
       },
@@ -69494,7 +69707,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElText = withInstall(_sfc_main$y);
+    const ElText = withInstall(_sfc_main$A);
     const DEFAULT_STEP = "00:30";
     const timeSelectProps = buildProps({
       /**
@@ -69667,7 +69880,7 @@ var require_index_001 = __commonJS({
       next.minutes = next.minutes % 60;
       return formatTime(next);
     };
-    var _sfc_main$x = /* @__PURE__ */ defineComponent({
+    var _sfc_main$z = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTimeSelect"
       },
@@ -69805,7 +70018,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElTimeSelect = withInstall(_sfc_main$x);
+    const ElTimeSelect = withInstall(_sfc_main$z);
     const TIMELINE_INJECTION_KEY = "timeline";
     const timelineProps = buildProps({
       /**
@@ -69899,7 +70112,7 @@ var require_index_001 = __commonJS({
        */
       hollow: Boolean
     });
-    var _sfc_main$w = /* @__PURE__ */ defineComponent({
+    var _sfc_main$y = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTimelineItem"
       },
@@ -70023,9 +70236,9 @@ var require_index_001 = __commonJS({
       }
     });
     const ElTimeline = withInstall(Timeline, {
-      TimelineItem: _sfc_main$w
+      TimelineItem: _sfc_main$y
     });
-    const ElTimelineItem = withNoopInstall(_sfc_main$w);
+    const ElTimelineItem = withNoopInstall(_sfc_main$y);
     const LEFT_CHECK_CHANGE_EVENT = "left-check-change";
     const RIGHT_CHECK_CHANGE_EVENT = "right-check-change";
     const transferProps = buildProps({
@@ -70266,7 +70479,7 @@ var require_index_001 = __commonJS({
         handleAllCheckedChange
       };
     };
-    var _sfc_main$v = /* @__PURE__ */ defineComponent({
+    var _sfc_main$x = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTransferPanel"
       },
@@ -70529,9 +70742,9 @@ var require_index_001 = __commonJS({
         onTargetCheckedChange
       };
     };
-    const _hoisted_1$h = { key: 0 };
-    const _hoisted_2$c = { key: 0 };
-    var _sfc_main$u = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$j = { key: 0 };
+    const _hoisted_2$e = { key: 0 };
+    var _sfc_main$w = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTransfer"
       },
@@ -70616,7 +70829,7 @@ var require_index_001 = __commonJS({
               class: normalizeClass(unref(ns).b())
             },
             [
-              createVNode(_sfc_main$v, {
+              createVNode(_sfc_main$x, {
                 ref_key: "leftPanel",
                 ref: leftPanel,
                 data: unref(sourceData),
@@ -70661,7 +70874,7 @@ var require_index_001 = __commonJS({
                       }),
                       !unref(isUndefined)(__props.buttonTexts[0]) ? (openBlock(), createElementBlock(
                         "span",
-                        _hoisted_1$h,
+                        _hoisted_1$j,
                         toDisplayString(__props.buttonTexts[0]),
                         1
                         /* TEXT */
@@ -70679,7 +70892,7 @@ var require_index_001 = __commonJS({
                     default: withCtx(() => [
                       !unref(isUndefined)(__props.buttonTexts[1]) ? (openBlock(), createElementBlock(
                         "span",
-                        _hoisted_2$c,
+                        _hoisted_2$e,
                         toDisplayString(__props.buttonTexts[1]),
                         1
                         /* TEXT */
@@ -70699,7 +70912,7 @@ var require_index_001 = __commonJS({
                 2
                 /* CLASS */
               ),
-              createVNode(_sfc_main$v, {
+              createVNode(_sfc_main$x, {
                 ref_key: "rightPanel",
                 ref: rightPanel,
                 data: unref(targetData),
@@ -70729,7 +70942,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElTransfer = withInstall(_sfc_main$u);
+    const ElTransfer = withInstall(_sfc_main$w);
     const NODE_KEY = "$treeNodeId";
     const markNodeData = function(node, data) {
       if (!data || data[NODE_KEY]) return;
@@ -71553,7 +71766,7 @@ var require_index_001 = __commonJS({
     const ROOT_TREE_INJECTION_KEY$1 = "RootTree";
     const NODE_INSTANCE_INJECTION_KEY = "NodeInstance";
     const TREE_NODE_MAP_INJECTION_KEY = "TreeNodeMap";
-    var _sfc_main$t = /* @__PURE__ */ defineComponent({
+    var _sfc_main$v = /* @__PURE__ */ defineComponent({
       name: "ElTreeNodeContent",
       props: {
         node: {
@@ -71795,12 +72008,12 @@ var require_index_001 = __commonJS({
         dragState
       };
     }
-    var _sfc_main$s = /* @__PURE__ */ defineComponent({
+    var _sfc_main$u = /* @__PURE__ */ defineComponent({
       name: "ElTreeNode",
       components: {
         ElCollapseTransition,
         ElCheckbox,
-        NodeContent: _sfc_main$t,
+        NodeContent: _sfc_main$v,
         ElIcon,
         Loading: loading_default
       },
@@ -72008,8 +72221,8 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$g = ["aria-expanded", "aria-disabled", "aria-checked", "draggable", "data-key"];
-    const _hoisted_2$b = ["aria-expanded"];
+    const _hoisted_1$i = ["aria-expanded", "aria-disabled", "aria-checked", "draggable", "data-key"];
+    const _hoisted_2$d = ["aria-expanded"];
     function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
       const _component_el_icon = resolveComponent("el-icon");
       const _component_el_checkbox = resolveComponent("el-checkbox");
@@ -72121,18 +72334,18 @@ var require_index_001 = __commonJS({
                 128
                 /* KEYED_FRAGMENT */
               ))
-            ], 10, _hoisted_2$b)), [
+            ], 10, _hoisted_2$d)), [
               [vShow, _ctx.expanded]
             ]) : createCommentVNode("v-if", true)
           ]),
           _: 1
           /* STABLE */
         })
-      ], 42, _hoisted_1$g)), [
+      ], 42, _hoisted_1$i)), [
         [vShow, _ctx.node.visible]
       ]);
     }
-    var ElTreeNode = /* @__PURE__ */ _export_sfc$1(_sfc_main$s, [["render", _sfc_render$2]]);
+    var ElTreeNode = /* @__PURE__ */ _export_sfc$1(_sfc_main$u, [["render", _sfc_render$2]]);
     function useKeydown({ el$ }, store) {
       const ns = useNamespace("tree");
       onMounted(() => {
@@ -72321,7 +72534,7 @@ var require_index_001 = __commonJS({
       "node-drag-enter": (draggingNode, dropNode, evt) => draggingNode && dropNode && evt,
       "node-drag-over": (draggingNode, dropNode, evt) => draggingNode && dropNode && evt
     };
-    var _sfc_main$r = /* @__PURE__ */ defineComponent({
+    var _sfc_main$t = /* @__PURE__ */ defineComponent({
       name: "ElTree",
       components: { ElTreeNode },
       props: treeProps$1,
@@ -72623,7 +72836,7 @@ var require_index_001 = __commonJS({
         /* CLASS */
       );
     }
-    var Tree = /* @__PURE__ */ _export_sfc$1(_sfc_main$r, [["render", _sfc_render$1]]);
+    var Tree = /* @__PURE__ */ _export_sfc$1(_sfc_main$t, [["render", _sfc_render$1]]);
     const ElTree = withInstall(Tree);
     const useSelect = (props2, { attrs, emit: emit2 }, {
       select,
@@ -73020,7 +73233,7 @@ var require_index_001 = __commonJS({
         return () => void 0;
       }
     });
-    var _sfc_main$q = /* @__PURE__ */ defineComponent({
+    var _sfc_main$s = /* @__PURE__ */ defineComponent({
       name: "ElTreeSelect",
       // disable `ElSelect` inherit current attrs
       inheritAttrs: false,
@@ -73113,7 +73326,7 @@ var require_index_001 = __commonJS({
         );
       }
     });
-    const ElTreeSelect = withInstall(_sfc_main$q);
+    const ElTreeSelect = withInstall(_sfc_main$s);
     const ROOT_TREE_INJECTION_KEY = /* @__PURE__ */ Symbol();
     const EMPTY_NODE = {
       key: -1,
@@ -73831,8 +74044,8 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$f = ["aria-expanded", "aria-disabled", "aria-checked", "data-key"];
-    var _sfc_main$p = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$h = ["aria-expanded", "aria-disabled", "aria-checked", "data-key"];
+    var _sfc_main$r = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTreeNode"
       },
@@ -73955,11 +74168,11 @@ var require_index_001 = __commonJS({
               6
               /* CLASS, STYLE */
             )
-          ], 42, _hoisted_1$f);
+          ], 42, _hoisted_1$h);
         };
       }
     });
-    var _sfc_main$o = /* @__PURE__ */ defineComponent({
+    var _sfc_main$q = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTreeV2"
       },
@@ -74056,7 +74269,7 @@ var require_index_001 = __commonJS({
                 "scrollbar-always-on": __props.scrollbarAlwaysOn
               }, {
                 default: withCtx(({ data, index, style }) => [
-                  (openBlock(), createBlock(_sfc_main$p, {
+                  (openBlock(), createBlock(_sfc_main$r, {
                     key: data[index].key,
                     style: normalizeStyle(style),
                     node: data[index],
@@ -74108,7 +74321,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElTreeV2 = withInstall(_sfc_main$o);
+    const ElTreeV2 = withInstall(_sfc_main$q);
     var __defProp = Object.defineProperty;
     var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
     var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -74408,13 +74621,13 @@ var require_index_001 = __commonJS({
     const uploadListEmits = {
       remove: (file) => !!file
     };
-    const _hoisted_1$e = ["tabindex", "aria-disabled", "onKeydown"];
-    const _hoisted_2$a = ["src", "crossorigin"];
-    const _hoisted_3$6 = ["onClick"];
-    const _hoisted_4$5 = ["title"];
-    const _hoisted_5$4 = ["onClick"];
-    const _hoisted_6$4 = ["onClick"];
-    var _sfc_main$n = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$g = ["tabindex", "aria-disabled", "onKeydown"];
+    const _hoisted_2$c = ["src", "crossorigin"];
+    const _hoisted_3$8 = ["onClick"];
+    const _hoisted_4$7 = ["title"];
+    const _hoisted_5$6 = ["onClick"];
+    const _hoisted_6$6 = ["onClick"];
+    var _sfc_main$p = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElUploadList"
       },
@@ -74474,7 +74687,7 @@ var require_index_001 = __commonJS({
                         src: file.url,
                         crossorigin: __props.crossorigin,
                         alt: ""
-                      }, null, 10, _hoisted_2$a)) : createCommentVNode("v-if", true),
+                      }, null, 10, _hoisted_2$c)) : createCommentVNode("v-if", true),
                       file.status === "uploading" || __props.listType !== "picture-card" ? (openBlock(), createElementBlock(
                         "div",
                         {
@@ -74498,8 +74711,8 @@ var require_index_001 = __commonJS({
                             createBaseVNode("span", {
                               class: normalizeClass(unref(nsUpload).be("list", "item-file-name")),
                               title: file.name
-                            }, toDisplayString(file.name), 11, _hoisted_4$5)
-                          ], 10, _hoisted_3$6),
+                            }, toDisplayString(file.name), 11, _hoisted_4$7)
+                          ], 10, _hoisted_3$8),
                           file.status === "uploading" ? (openBlock(), createBlock(unref(ElProgress), {
                             key: 0,
                             type: __props.listType === "picture-card" ? "circle" : "line",
@@ -74585,7 +74798,7 @@ var require_index_001 = __commonJS({
                               _: 1
                               /* STABLE */
                             }, 8, ["class"])
-                          ], 10, _hoisted_5$4),
+                          ], 10, _hoisted_5$6),
                           !unref(disabled) ? (openBlock(), createElementBlock("span", {
                             key: 0,
                             class: normalizeClass(unref(nsUpload).be("list", "item-delete")),
@@ -74600,13 +74813,13 @@ var require_index_001 = __commonJS({
                               _: 1
                               /* STABLE */
                             }, 8, ["class"])
-                          ], 10, _hoisted_6$4)) : createCommentVNode("v-if", true)
+                          ], 10, _hoisted_6$6)) : createCommentVNode("v-if", true)
                         ],
                         2
                         /* CLASS */
                       )) : createCommentVNode("v-if", true)
                     ])
-                  ], 42, _hoisted_1$e);
+                  ], 42, _hoisted_1$g);
                 }),
                 128
                 /* KEYED_FRAGMENT */
@@ -74663,7 +74876,7 @@ var require_index_001 = __commonJS({
       file: (file) => isArray$1(file)
     };
     const COMPONENT_NAME$1 = "ElUploadDrag";
-    var _sfc_main$m = /* @__PURE__ */ defineComponent({
+    var _sfc_main$o = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME$1
       },
@@ -74769,9 +74982,9 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$d = ["tabindex", "aria-disabled", "onKeydown"];
-    const _hoisted_2$9 = ["name", "disabled", "multiple", "accept", "webkitdirectory"];
-    var _sfc_main$l = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$f = ["tabindex", "aria-disabled", "onKeydown"];
+    const _hoisted_2$b = ["name", "disabled", "multiple", "accept", "webkitdirectory"];
+    var _sfc_main$n = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElUploadContent",
         inheritAttrs: false
@@ -74935,7 +75148,7 @@ var require_index_001 = __commonJS({
             onClick: handleClick,
             onKeydown: withKeys(withModifiers(handleKeydown, ["self"]), ["enter", "space"])
           }, [
-            __props.drag ? (openBlock(), createBlock(_sfc_main$m, {
+            __props.drag ? (openBlock(), createBlock(_sfc_main$o, {
               key: 0,
               disabled: unref(disabled),
               directory: __props.directory,
@@ -74960,8 +75173,8 @@ var require_index_001 = __commonJS({
               onChange: handleChange,
               onClick: _cache[0] || (_cache[0] = withModifiers(() => {
               }, ["stop"]))
-            }, null, 42, _hoisted_2$9)
-          ], 42, _hoisted_1$d);
+            }, null, 42, _hoisted_2$b)
+          ], 42, _hoisted_1$f);
         };
       }
     });
@@ -75107,7 +75320,7 @@ var require_index_001 = __commonJS({
         revokeFileObjectURL
       };
     };
-    var _sfc_main$k = /* @__PURE__ */ defineComponent({
+    var _sfc_main$m = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElUpload"
       },
@@ -75159,7 +75372,7 @@ var require_index_001 = __commonJS({
         });
         return (_ctx, _cache) => {
           return openBlock(), createElementBlock("div", null, [
-            isPictureCard.value && __props.showFileList ? (openBlock(), createBlock(_sfc_main$n, {
+            isPictureCard.value && __props.showFileList ? (openBlock(), createBlock(_sfc_main$p, {
               key: 0,
               disabled: unref(disabled),
               "list-type": __props.listType,
@@ -75170,7 +75383,7 @@ var require_index_001 = __commonJS({
             }, createSlots({
               append: withCtx(() => [
                 createVNode(
-                  _sfc_main$l,
+                  _sfc_main$n,
                   mergeProps({
                     ref_key: "uploadRef",
                     ref: uploadRef
@@ -75202,7 +75415,7 @@ var require_index_001 = __commonJS({
               } : void 0
             ]), 1032, ["disabled", "list-type", "files", "crossorigin", "handle-preview", "onRemove"])) : createCommentVNode("v-if", true),
             !isPictureCard.value || isPictureCard.value && !__props.showFileList ? (openBlock(), createBlock(
-              _sfc_main$l,
+              _sfc_main$n,
               mergeProps({
                 key: 1,
                 ref_key: "uploadRef",
@@ -75221,7 +75434,7 @@ var require_index_001 = __commonJS({
             )) : createCommentVNode("v-if", true),
             _ctx.$slots.trigger ? renderSlot(_ctx.$slots, "default", { key: 2 }) : createCommentVNode("v-if", true),
             renderSlot(_ctx.$slots, "tip"),
-            !isPictureCard.value && __props.showFileList ? (openBlock(), createBlock(_sfc_main$n, {
+            !isPictureCard.value && __props.showFileList ? (openBlock(), createBlock(_sfc_main$p, {
               key: 3,
               disabled: unref(disabled),
               "list-type": __props.listType,
@@ -75248,7 +75461,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElUpload = withInstall(_sfc_main$k);
+    const ElUpload = withInstall(_sfc_main$m);
     const watermarkProps = buildProps({
       /**
        * @description The z-index of the appended watermark element
@@ -75443,7 +75656,7 @@ var require_index_001 = __commonJS({
       }
       return getClips;
     }
-    var _sfc_main$j = /* @__PURE__ */ defineComponent({
+    var _sfc_main$l = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElWatermark"
       },
@@ -75682,7 +75895,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElWatermark = withInstall(_sfc_main$j);
+    const ElWatermark = withInstall(_sfc_main$l);
     const tourStrategies = ["absolute", "fixed"];
     const tourPlacements = [
       "top-start",
@@ -77487,12 +77700,12 @@ var require_index_001 = __commonJS({
         }
       };
     };
-    const _hoisted_1$c = { style: {
+    const _hoisted_1$e = { style: {
       width: "100%",
       height: "100%"
     } };
-    const _hoisted_2$8 = ["d"];
-    var _sfc_main$i = /* @__PURE__ */ defineComponent({
+    const _hoisted_2$a = ["d"];
+    var _sfc_main$k = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTourMask",
         inheritAttrs: false
@@ -77551,12 +77764,12 @@ var require_index_001 = __commonJS({
               style: maskStyle.value
             }, _ctx.$attrs),
             [
-              (openBlock(), createElementBlock("svg", _hoisted_1$c, [
+              (openBlock(), createElementBlock("svg", _hoisted_1$e, [
                 createBaseVNode("path", {
                   class: normalizeClass(unref(ns).e("hollow")),
                   style: normalizeStyle(pathStyle.value),
                   d: path.value
-                }, null, 14, _hoisted_2$8)
+                }, null, 14, _hoisted_2$a)
               ]))
             ],
             16
@@ -77565,8 +77778,8 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$b = ["data-side"];
-    var _sfc_main$h = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$d = ["data-side"];
+    var _sfc_main$j = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTourContent"
       },
@@ -77644,7 +77857,7 @@ var require_index_001 = __commonJS({
               6
               /* CLASS, STYLE */
             )) : createCommentVNode("v-if", true)
-          ], 14, _hoisted_1$b);
+          ], 14, _hoisted_1$d);
         };
       }
     });
@@ -77689,7 +77902,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    var _sfc_main$g = /* @__PURE__ */ defineComponent({
+    var _sfc_main$i = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTour",
         inheritAttrs: false
@@ -77816,7 +78029,7 @@ var require_index_001 = __commonJS({
                       "div",
                       mergeProps({ class: kls.value }, _ctx.$attrs),
                       [
-                        createVNode(_sfc_main$i, {
+                        createVNode(_sfc_main$k, {
                           visible: mergedShowMask.value,
                           fill: (_a = mergedMaskStyle.value) == null ? void 0 : _a.color,
                           style: normalizeStyle((_b = mergedMaskStyle.value) == null ? void 0 : _b.style),
@@ -77824,7 +78037,7 @@ var require_index_001 = __commonJS({
                           "z-index": mergedZIndex.value,
                           "target-area-clickable": __props.targetAreaClickable
                         }, null, 8, ["visible", "fill", "style", "pos", "z-index", "target-area-clickable"]),
-                        __props.modelValue ? (openBlock(), createBlock(_sfc_main$h, {
+                        __props.modelValue ? (openBlock(), createBlock(_sfc_main$j, {
                           key: unref(current),
                           reference: unref(triggerTarget),
                           placement: mergedPlacement.value,
@@ -77947,8 +78160,8 @@ var require_index_001 = __commonJS({
     const tourStepEmits = {
       close: () => true
     };
-    const _hoisted_1$a = ["aria-label"];
-    var _sfc_main$f = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$c = ["aria-label"];
+    var _sfc_main$h = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElTourStep"
       },
@@ -78068,7 +78281,7 @@ var require_index_001 = __commonJS({
                   _: 1
                   /* STABLE */
                 }, 8, ["class"])
-              ], 10, _hoisted_1$a)) : createCommentVNode("v-if", true),
+              ], 10, _hoisted_1$c)) : createCommentVNode("v-if", true),
               createBaseVNode(
                 "header",
                 {
@@ -78205,10 +78418,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElTour = withInstall(_sfc_main$g, {
-      TourStep: _sfc_main$f
+    const ElTour = withInstall(_sfc_main$i, {
+      TourStep: _sfc_main$h
     });
-    const ElTourStep = withNoopInstall(_sfc_main$f);
+    const ElTourStep = withNoopInstall(_sfc_main$h);
     const anchorProps = buildProps({
       /**
        * @description scroll container
@@ -78299,7 +78512,7 @@ var require_index_001 = __commonJS({
       }
       return target;
     });
-    var _sfc_main$e = /* @__PURE__ */ defineComponent({
+    var _sfc_main$g = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElAnchor"
       },
@@ -78531,8 +78744,8 @@ var require_index_001 = __commonJS({
        */
       href: String
     });
-    const _hoisted_1$9 = ["href"];
-    var _sfc_main$d = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$b = ["href"];
+    var _sfc_main$f = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElAnchorLink"
       },
@@ -78606,7 +78819,7 @@ var require_index_001 = __commonJS({
                     /* TEXT */
                   )
                 ])
-              ], 10, _hoisted_1$9),
+              ], 10, _hoisted_1$b),
               _ctx.$slots["sub-link"] && unref(direction2) === "vertical" ? (openBlock(), createElementBlock(
                 "div",
                 {
@@ -78626,10 +78839,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElAnchor = withInstall(_sfc_main$e, {
-      AnchorLink: _sfc_main$d
+    const ElAnchor = withInstall(_sfc_main$g, {
+      AnchorLink: _sfc_main$f
     });
-    const ElAnchorLink = withNoopInstall(_sfc_main$d);
+    const ElAnchorLink = withNoopInstall(_sfc_main$f);
     const defaultProps = {
       label: "label",
       value: "value",
@@ -78697,9 +78910,9 @@ var require_index_001 = __commonJS({
       [UPDATE_MODEL_EVENT]: (val) => isString(val) || isNumber(val) || isBoolean(val),
       [CHANGE_EVENT]: (val) => isString(val) || isNumber(val) || isBoolean(val)
     };
-    const _hoisted_1$8 = ["id", "aria-label", "aria-labelledby"];
-    const _hoisted_2$7 = ["name", "disabled", "checked", "onChange"];
-    var _sfc_main$c = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$a = ["id", "aria-label", "aria-labelledby"];
+    const _hoisted_2$9 = ["name", "disabled", "checked", "onChange"];
+    var _sfc_main$e = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElSegmented"
       },
@@ -78865,7 +79078,7 @@ var require_index_001 = __commonJS({
                           disabled: getDisabled(item),
                           checked: getSelected(item),
                           onChange: ($event) => handleChange($event, item)
-                        }, null, 42, _hoisted_2$7),
+                        }, null, 42, _hoisted_2$9),
                         createBaseVNode(
                           "div",
                           {
@@ -78897,11 +79110,11 @@ var require_index_001 = __commonJS({
               2
               /* CLASS */
             )
-          ], 10, _hoisted_1$8)) : createCommentVNode("v-if", true);
+          ], 10, _hoisted_1$a)) : createCommentVNode("v-if", true);
         };
       }
     });
-    const ElSegmented = withInstall(_sfc_main$c);
+    const ElSegmented = withInstall(_sfc_main$e);
     const filterOption = (pattern, option) => {
       const lowerCase = pattern.toLowerCase();
       const label = option.label || option.value || "";
@@ -79179,8 +79392,8 @@ var require_index_001 = __commonJS({
     const mentionDropdownEmits = {
       select: (option) => isString(option.value)
     };
-    const _hoisted_1$7 = ["id", "aria-disabled", "aria-selected", "onMousemove", "onClick"];
-    var _sfc_main$b = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$9 = ["id", "aria-disabled", "aria-selected", "onMousemove", "onClick"];
+    var _sfc_main$d = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElMentionDropdown"
       },
@@ -79334,7 +79547,7 @@ var require_index_001 = __commonJS({
                             )
                           ];
                         })
-                      ], 42, _hoisted_1$7);
+                      ], 42, _hoisted_1$9);
                     }),
                     128
                     /* KEYED_FRAGMENT */
@@ -79382,7 +79595,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    var _sfc_main$a = /* @__PURE__ */ defineComponent({
+    var _sfc_main$c = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElMention",
         inheritAttrs: false
@@ -79653,7 +79866,7 @@ var require_index_001 = __commonJS({
                   )
                 ]),
                 content: withCtx(() => [
-                  createVNode(_sfc_main$b, {
+                  createVNode(_sfc_main$d, {
                     ref_key: "dropdownRef",
                     ref: dropdownRef,
                     options: filteredOptions.value,
@@ -79690,7 +79903,7 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElMention = withInstall(_sfc_main$a);
+    const ElMention = withInstall(_sfc_main$c);
     const splitterProps = buildProps({
       layout: {
         type: String,
@@ -79892,7 +80105,7 @@ var require_index_001 = __commonJS({
         onCollapse
       };
     }
-    var _sfc_main$9 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$b = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElSplitter"
       },
@@ -80036,7 +80249,7 @@ var require_index_001 = __commonJS({
       }
       return false;
     }
-    var _sfc_main$8 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$a = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElSplitterBar"
       },
@@ -80199,7 +80412,7 @@ var require_index_001 = __commonJS({
       }
     });
     const COMPONENT_NAME = "ElSplitterPanel";
-    var _sfc_main$7 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$9 = /* @__PURE__ */ defineComponent({
       ...{
         name: COMPONENT_NAME
       },
@@ -80346,7 +80559,7 @@ var require_index_001 = __commonJS({
                 16
                 /* FULL_PROPS */
               ),
-              isShowBar.value ? (openBlock(), createBlock(_sfc_main$8, {
+              isShowBar.value ? (openBlock(), createBlock(_sfc_main$a, {
                 key: 0,
                 index: index.value,
                 layout: unref(layout2),
@@ -80375,10 +80588,10 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const ElSplitter = withInstall(_sfc_main$9, {
-      SplitPanel: _sfc_main$7
+    const ElSplitter = withInstall(_sfc_main$b, {
+      SplitPanel: _sfc_main$9
     });
-    const ElSplitterPanel = withNoopInstall(_sfc_main$7);
+    const ElSplitterPanel = withNoopInstall(_sfc_main$9);
     var Components = [
       ElAffix,
       ElAlert,
@@ -81117,9 +81330,9 @@ var require_index_001 = __commonJS({
       const idx = instances.findIndex((instance) => instance.id === id);
       return idx > 0 ? 16 : offset2;
     };
-    const _hoisted_1$6 = ["id"];
-    const _hoisted_2$6 = ["innerHTML"];
-    var _sfc_main$6 = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$8 = ["id"];
+    const _hoisted_2$8 = ["innerHTML"];
+    var _sfc_main$8 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElMessage"
       },
@@ -81272,7 +81485,7 @@ var require_index_001 = __commonJS({
                       createBaseVNode("p", {
                         class: normalizeClass(unref(ns).e("content")),
                         innerHTML: __props.message
-                      }, null, 10, _hoisted_2$6)
+                      }, null, 10, _hoisted_2$8)
                     ],
                     2112
                     /* STABLE_FRAGMENT, DEV_ROOT_FRAGMENT */
@@ -81289,7 +81502,7 @@ var require_index_001 = __commonJS({
                   _: 1
                   /* STABLE */
                 }, 8, ["class"])) : createCommentVNode("v-if", true)
-              ], 46, _hoisted_1$6), [
+              ], 46, _hoisted_1$8), [
                 [vShow, visible.value]
               ])
             ]),
@@ -81376,7 +81589,7 @@ var require_index_001 = __commonJS({
         }
       };
       const vnode = createVNode(
-        _sfc_main$6,
+        _sfc_main$8,
         props2,
         isFunction$1(props2.message) || isVNode(props2.message) ? {
           default: isFunction$1(props2.message) ? props2.message : () => props2.message
@@ -81502,7 +81715,7 @@ var require_index_001 = __commonJS({
         }
       }
     };
-    var _sfc_main$5 = /* @__PURE__ */ defineComponent({
+    var _sfc_main$7 = /* @__PURE__ */ defineComponent({
       name: "ElMessageBox",
       directives: {
         TrapFocus
@@ -81795,9 +82008,9 @@ var require_index_001 = __commonJS({
         };
       }
     });
-    const _hoisted_1$5 = ["aria-label", "aria-describedby"];
-    const _hoisted_2$5 = ["aria-label"];
-    const _hoisted_3$5 = ["id"];
+    const _hoisted_1$7 = ["aria-label", "aria-describedby"];
+    const _hoisted_2$7 = ["aria-label"];
+    const _hoisted_3$7 = ["id"];
     function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
       const _component_el_icon = resolveComponent("el-icon");
       const _component_el_input = resolveComponent("el-input");
@@ -81903,7 +82116,7 @@ var require_index_001 = __commonJS({
                                 _: 1
                                 /* STABLE */
                               }, 8, ["class"])
-                            ], 42, _hoisted_2$5)) : createCommentVNode("v-if", true)
+                            ], 42, _hoisted_2$7)) : createCommentVNode("v-if", true)
                           ],
                           2
                           /* CLASS */
@@ -81989,7 +82202,7 @@ var require_index_001 = __commonJS({
                           ), [
                             [vShow, _ctx.showInput]
                           ])
-                        ], 10, _hoisted_3$5),
+                        ], 10, _hoisted_3$7),
                         createBaseVNode(
                           "div",
                           {
@@ -82055,7 +82268,7 @@ var require_index_001 = __commonJS({
                   _: 3
                   /* FORWARDED */
                 }, 8, ["trapped", "focus-trap-el", "focus-start-el", "onReleaseRequested"])
-              ], 42, _hoisted_1$5)
+              ], 42, _hoisted_1$7)
             ]),
             _: 3
             /* FORWARDED */
@@ -82067,7 +82280,7 @@ var require_index_001 = __commonJS({
         /* FORWARDED */
       });
     }
-    var MessageBoxConstructor = /* @__PURE__ */ _export_sfc$1(_sfc_main$5, [["render", _sfc_render]]);
+    var MessageBoxConstructor = /* @__PURE__ */ _export_sfc$1(_sfc_main$7, [["render", _sfc_render]]);
     const messageInstance = /* @__PURE__ */ new Map();
     const getAppendToElement = (props2) => {
       let appendTo = document.body;
@@ -82337,11 +82550,11 @@ var require_index_001 = __commonJS({
     const notificationEmits = {
       destroy: () => true
     };
-    const _hoisted_1$4 = ["id"];
-    const _hoisted_2$4 = ["textContent"];
-    const _hoisted_3$4 = { key: 0 };
-    const _hoisted_4$4 = ["innerHTML"];
-    var _sfc_main$4 = /* @__PURE__ */ defineComponent({
+    const _hoisted_1$6 = ["id"];
+    const _hoisted_2$6 = ["textContent"];
+    const _hoisted_3$6 = { key: 0 };
+    const _hoisted_4$6 = ["innerHTML"];
+    var _sfc_main$6 = /* @__PURE__ */ defineComponent({
       ...{
         name: "ElNotification"
       },
@@ -82453,7 +82666,7 @@ var require_index_001 = __commonJS({
                     createBaseVNode("h2", {
                       class: normalizeClass(unref(ns).e("title")),
                       textContent: toDisplayString(__props.title)
-                    }, null, 10, _hoisted_2$4),
+                    }, null, 10, _hoisted_2$6),
                     withDirectives(createBaseVNode(
                       "div",
                       {
@@ -82464,7 +82677,7 @@ var require_index_001 = __commonJS({
                         renderSlot(_ctx.$slots, "default", {}, () => [
                           !__props.dangerouslyUseHTMLString ? (openBlock(), createElementBlock(
                             "p",
-                            _hoisted_3$4,
+                            _hoisted_3$6,
                             toDisplayString(__props.message),
                             1
                             /* TEXT */
@@ -82473,7 +82686,7 @@ var require_index_001 = __commonJS({
                             { key: 1 },
                             [
                               createCommentVNode(" Caution here, message could've been compromised, never use user's input as message "),
-                              createBaseVNode("p", { innerHTML: __props.message }, null, 8, _hoisted_4$4)
+                              createBaseVNode("p", { innerHTML: __props.message }, null, 8, _hoisted_4$6)
                             ],
                             2112
                             /* STABLE_FRAGMENT, DEV_ROOT_FRAGMENT */
@@ -82500,7 +82713,7 @@ var require_index_001 = __commonJS({
                   2
                   /* CLASS */
                 )
-              ], 46, _hoisted_1$4), [
+              ], 46, _hoisted_1$6), [
                 [vShow, visible.value]
               ])
             ]),
@@ -82551,7 +82764,7 @@ var require_index_001 = __commonJS({
       }
       const container = document.createElement("div");
       const vm = createVNode(
-        _sfc_main$4,
+        _sfc_main$6,
         props2,
         isFunction$1(props2.message) ? props2.message : isVNode(props2.message) ? () => props2.message : null
       );
@@ -82633,6 +82846,92 @@ var require_index_001 = __commonJS({
     var installer = makeInstaller([...Components, ...Plugins]);
     installer.install;
     installer.version;
+    function useProfileSetsRemoteSync(getProfileSets, getAccount, onUpdateProfileSets, onAfterPull) {
+      const isUploadingProfileSetsToCloud = /* @__PURE__ */ ref(false);
+      const isDownloadingProfileSetsFromCloud = /* @__PURE__ */ ref(false);
+      const uploadProfileSetsToCloud = async () => {
+        const account = getAccount();
+        if (!account) {
+          return ElMessage.warning("请先在 [系统设置] 填写易投账号并点击「立即保存全局设置」");
+        }
+        if (!window.api?.saveProfileSetsRemote) return;
+        const sets = getProfileSets() || [];
+        if (!sets.length) {
+          try {
+            await ElMessageBox.confirm(
+              "当前本地运行预设为空，上传将用空列表覆盖服务器上的预设（相当于清空云端）。是否继续？",
+              "上传空列表到云端",
+              { type: "warning", confirmButtonText: "清空云端", cancelButtonText: "取消" }
+            );
+          } catch {
+            return;
+          }
+        }
+        isUploadingProfileSetsToCloud.value = true;
+        const loading = ElLoading.service({
+          lock: true,
+          text: "正在上传运行预设...",
+          background: "rgba(0, 0, 0, 0.7)"
+        });
+        try {
+          const res = await window.api.saveProfileSetsRemote({
+            account,
+            profileSets: JSON.parse(JSON.stringify(sets))
+          });
+          if (res.status === "ok" || res.success === true) {
+            ElMessage.success("运行预设已上传至服务器");
+          } else {
+            ElMessage.error(res.msg || res.message || "上传失败");
+          }
+        } catch {
+          ElMessage.error("上传失败");
+        } finally {
+          loading.close();
+          isUploadingProfileSetsToCloud.value = false;
+        }
+      };
+      const downloadProfileSetsFromCloud = () => {
+        const account = getAccount();
+        if (!account) {
+          return ElMessage.warning("请先在 [系统设置] 填写易投账号并点击「立即保存全局设置」");
+        }
+        if (!window.api?.getProfileSetsRemote) return;
+        ElMessageBox.confirm(
+          "将从服务器拉取该账号下的运行预设并覆盖本地列表（不影响方案配置与分组）。是否继续？",
+          "拉取运行预设",
+          { type: "warning", confirmButtonText: "拉取", cancelButtonText: "取消" }
+        ).then(async () => {
+          isDownloadingProfileSetsFromCloud.value = true;
+          const loading = ElLoading.service({
+            lock: true,
+            text: "正在拉取运行预设...",
+            background: "rgba(0, 0, 0, 0.7)"
+          });
+          try {
+            const res = await window.api.getProfileSetsRemote(account);
+            if (res.status !== "ok" || !Array.isArray(res.profileSets)) {
+              ElMessage.error(res.msg || "拉取失败");
+              return;
+            }
+            onUpdateProfileSets(res.profileSets);
+            onAfterPull?.();
+            ElMessage.success("已从云端同步运行预设");
+          } catch {
+            ElMessage.error("拉取失败");
+          } finally {
+            loading.close();
+            isDownloadingProfileSetsFromCloud.value = false;
+          }
+        }).catch(() => {
+        });
+      };
+      return {
+        isUploadingProfileSetsToCloud,
+        isDownloadingProfileSetsFromCloud,
+        uploadProfileSetsToCloud,
+        downloadProfileSetsFromCloud
+      };
+    }
     const _export_sfc = (sfc, props2) => {
       const target = sfc.__vccOpts || sfc;
       for (const [key, val] of props2) {
@@ -82640,45 +82939,612 @@ var require_index_001 = __commonJS({
       }
       return target;
     };
-    const _hoisted_1$3 = { class: "run-tab-container" };
-    const _hoisted_2$3 = { class: "path-link-wrapper" };
-    const _hoisted_3$3 = {
+    const _hoisted_1$5 = { class: "profile-set-toolbar" };
+    const _hoisted_2$5 = { class: "profile-set-toolbar-row" };
+    const _hoisted_3$5 = {
+      key: 0,
+      class: "profile-set-toolbar-cloud"
+    };
+    const _hoisted_4$5 = {
+      key: 0,
+      class: "profile-set-cloud-hint"
+    };
+    const _hoisted_5$5 = {
+      key: 1,
+      class: "profile-set-cloud-hint is-muted"
+    };
+    const _hoisted_6$5 = {
+      key: 1,
+      class: "profile-set-empty"
+    };
+    const _hoisted_7$5 = {
+      key: 1,
+      class: "profile-set-form"
+    };
+    const _hoisted_8$5 = { class: "form-line" };
+    const _hoisted_9$5 = { class: "form-line form-line-col" };
+    const _hoisted_10$5 = { style: { "display": "flex", "justify-content": "space-between", "align-items": "center" } };
+    const _hoisted_11$5 = { style: { "color": "#909399", "font-size": "12px" } };
+    const _sfc_main$5 = {
+      __name: "ProfileSetManageDialog",
+      props: {
+        modelValue: { type: Boolean, default: false },
+        allProfiles: Object,
+        profileOrder: Array,
+        profileSets: { type: Array, default: () => [] },
+        workingAccount: { type: String, default: "" }
+      },
+      emits: [
+        "update:modelValue",
+        "update-profile-sets",
+        "applied",
+        "cleared-selected-preset",
+        "remove-preset"
+      ],
+      setup(__props, { expose: __expose, emit: __emit }) {
+        const props2 = __props;
+        const emit2 = __emit;
+        const dialogVisible = computed({
+          get: () => props2.modelValue,
+          set: (v2) => emit2("update:modelValue", v2)
+        });
+        const profileSetPanel = /* @__PURE__ */ ref("list");
+        const editingSetId = /* @__PURE__ */ ref(null);
+        const closeDialogAfterFormSave = /* @__PURE__ */ ref(false);
+        const profileSetForm = /* @__PURE__ */ reactive({
+          id: "",
+          name: "",
+          profiles: []
+        });
+        const profileSetDialogTitle = computed(() => {
+          if (profileSetPanel.value === "list") return "管理运行预设";
+          return editingSetId.value ? "编辑运行预设" : "新建运行预设";
+        });
+        const hasProfileSetsRemoteAccount = computed(() => !!(props2.workingAccount || "").trim());
+        const {
+          isUploadingProfileSetsToCloud,
+          isDownloadingProfileSetsFromCloud,
+          uploadProfileSetsToCloud,
+          downloadProfileSetsFromCloud
+        } = useProfileSetsRemoteSync(
+          () => props2.profileSets,
+          () => (props2.workingAccount || "").trim(),
+          (list) => emit2("update-profile-sets", list),
+          () => emit2("cleared-selected-preset")
+        );
+        const genProfileSetId = () => typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `ps_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+        const validProfilesInSet = (row) => {
+          const list = row?.profiles;
+          if (!Array.isArray(list) || !props2.allProfiles) return [];
+          return list.filter((name) => props2.allProfiles[name]);
+        };
+        const groupedProfilesForSelect = computed(() => {
+          if (!props2.allProfiles) return [];
+          const orderedNames = Array.isArray(props2.profileOrder) && props2.profileOrder.length > 0 ? props2.profileOrder.filter((name) => props2.allProfiles[name]) : Object.keys(props2.allProfiles);
+          const names2 = [
+            ...orderedNames,
+            ...Object.keys(props2.allProfiles).filter((name) => !orderedNames.includes(name))
+          ];
+          const groupsMap = /* @__PURE__ */ new Map();
+          groupsMap.set("默认分组", []);
+          names2.forEach((name) => {
+            const groupName = props2.allProfiles[name].group || "默认分组";
+            if (!groupsMap.has(groupName)) {
+              groupsMap.set(groupName, []);
+            }
+            groupsMap.get(groupName).push(name);
+          });
+          const result = [];
+          for (const [gName, pList] of groupsMap.entries()) {
+            if (pList.length > 0 || gName === "默认分组") {
+              result.push({
+                groupName: gName,
+                label: `📂 ${gName}`,
+                options: pList
+              });
+            }
+          }
+          return result;
+        });
+        const resetProfileSetForm = () => {
+          profileSetForm.id = "";
+          profileSetForm.name = "";
+          profileSetForm.profiles = [];
+          editingSetId.value = null;
+        };
+        const openList = () => {
+          profileSetPanel.value = "list";
+          closeDialogAfterFormSave.value = false;
+          emit2("update:modelValue", true);
+        };
+        const openCreate = () => {
+          resetProfileSetForm();
+          profileSetForm.id = genProfileSetId();
+          profileSetPanel.value = "edit";
+          closeDialogAfterFormSave.value = false;
+          emit2("update:modelValue", true);
+        };
+        const openEdit = (row) => {
+          editingSetId.value = row.id;
+          profileSetForm.id = row.id;
+          profileSetForm.name = row.name || "";
+          profileSetForm.profiles = Array.isArray(row.profiles) ? [...row.profiles] : [];
+          profileSetPanel.value = "edit";
+          closeDialogAfterFormSave.value = false;
+        };
+        const openFromCurrent = (profiles) => {
+          resetProfileSetForm();
+          profileSetForm.id = genProfileSetId();
+          profileSetForm.profiles = [...profiles];
+          profileSetPanel.value = "edit";
+          closeDialogAfterFormSave.value = true;
+          emit2("update:modelValue", true);
+        };
+        __expose({
+          openList,
+          openCreate,
+          openEdit,
+          openFromCurrent
+        });
+        const submitProfileSetForm = () => {
+          const name = (profileSetForm.name || "").trim();
+          if (!name) return ElMessage.warning("请填写运行预设名称");
+          const profiles = (profileSetForm.profiles || []).filter((p2) => props2.allProfiles?.[p2]);
+          if (profiles.length === 0) return ElMessage.warning("请至少选择一个仍存在的运行方案");
+          const list = [...props2.profileSets || []];
+          let savedId = "";
+          if (editingSetId.value) {
+            const i = list.findIndex((s2) => s2.id === editingSetId.value);
+            if (i >= 0) list[i] = { ...list[i], name, profiles };
+            savedId = editingSetId.value;
+          } else {
+            savedId = profileSetForm.id || genProfileSetId();
+            list.push({ id: savedId, name, profiles });
+          }
+          emit2("update-profile-sets", list);
+          ElMessage.success("运行预设已保存");
+          if (closeDialogAfterFormSave.value) {
+            emit2("applied", { id: savedId, profiles });
+            dialogVisible.value = false;
+            closeDialogAfterFormSave.value = false;
+            profileSetPanel.value = "list";
+            resetProfileSetForm();
+            return;
+          }
+          profileSetPanel.value = "list";
+          resetProfileSetForm();
+        };
+        const removeProfileSet = (id) => {
+          ElMessageBox.confirm("确定删除该运行预设？（不影响方案与分组）", "提示", {
+            type: "warning",
+            confirmButtonText: "删除",
+            cancelButtonText: "取消"
+          }).then(() => {
+            const next = (props2.profileSets || []).filter((s2) => s2.id !== id);
+            emit2("update-profile-sets", next);
+            emit2("remove-preset", id);
+            ElMessage.success("已删除");
+          }).catch(() => {
+          });
+        };
+        return (_ctx, _cache) => {
+          const _component_el_button = resolveComponent("el-button");
+          const _component_el_icon = resolveComponent("el-icon");
+          const _component_el_table_column = resolveComponent("el-table-column");
+          const _component_el_table = resolveComponent("el-table");
+          const _component_el_input = resolveComponent("el-input");
+          const _component_el_option = resolveComponent("el-option");
+          const _component_el_option_group = resolveComponent("el-option-group");
+          const _component_el_select = resolveComponent("el-select");
+          const _component_el_dialog = resolveComponent("el-dialog");
+          return openBlock(), createBlock(_component_el_dialog, {
+            modelValue: dialogVisible.value,
+            "onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => dialogVisible.value = $event),
+            title: profileSetDialogTitle.value,
+            width: "560px",
+            "destroy-on-close": "",
+            class: "profile-set-dialog"
+          }, {
+            footer: withCtx(() => [
+              profileSetPanel.value === "list" ? (openBlock(), createBlock(_component_el_button, {
+                key: 0,
+                type: "primary",
+                onClick: _cache[2] || (_cache[2] = ($event) => dialogVisible.value = false)
+              }, {
+                default: withCtx(() => [..._cache[12] || (_cache[12] = [
+                  createTextVNode("关闭", -1)
+                ])]),
+                _: 1
+              })) : (openBlock(), createElementBlock(Fragment, { key: 1 }, [
+                createVNode(_component_el_button, {
+                  onClick: _cache[3] || (_cache[3] = ($event) => profileSetPanel.value = "list")
+                }, {
+                  default: withCtx(() => [..._cache[13] || (_cache[13] = [
+                    createTextVNode("返回列表", -1)
+                  ])]),
+                  _: 1
+                }),
+                createVNode(_component_el_button, {
+                  type: "primary",
+                  onClick: submitProfileSetForm
+                }, {
+                  default: withCtx(() => [..._cache[14] || (_cache[14] = [
+                    createTextVNode("确定", -1)
+                  ])]),
+                  _: 1
+                })
+              ], 64))
+            ]),
+            default: withCtx(() => [
+              profileSetPanel.value === "list" ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
+                createBaseVNode("div", _hoisted_1$5, [
+                  createBaseVNode("div", _hoisted_2$5, [
+                    createVNode(_component_el_button, {
+                      type: "primary",
+                      size: "small",
+                      onClick: openCreate
+                    }, {
+                      default: withCtx(() => [..._cache[5] || (_cache[5] = [
+                        createTextVNode(" 新建预设 ", -1)
+                      ])]),
+                      _: 1
+                    }),
+                    hasProfileSetsRemoteAccount.value ? (openBlock(), createElementBlock("div", _hoisted_3$5, [
+                      createVNode(_component_el_button, {
+                        type: "warning",
+                        plain: "",
+                        size: "small",
+                        disabled: unref(isUploadingProfileSetsToCloud),
+                        onClick: unref(uploadProfileSetsToCloud)
+                      }, {
+                        default: withCtx(() => [
+                          unref(isUploadingProfileSetsToCloud) ? (openBlock(), createBlock(_component_el_icon, {
+                            key: 0,
+                            class: "is-loading",
+                            style: { "margin-right": "4px" }
+                          }, {
+                            default: withCtx(() => [
+                              createVNode(unref(loading_default))
+                            ]),
+                            _: 1
+                          })) : createCommentVNode("", true),
+                          _cache[6] || (_cache[6] = createTextVNode(" 上传到云端 ", -1))
+                        ]),
+                        _: 1
+                      }, 8, ["disabled", "onClick"]),
+                      createVNode(_component_el_button, {
+                        type: "primary",
+                        plain: "",
+                        size: "small",
+                        disabled: unref(isDownloadingProfileSetsFromCloud),
+                        onClick: unref(downloadProfileSetsFromCloud)
+                      }, {
+                        default: withCtx(() => [
+                          unref(isDownloadingProfileSetsFromCloud) ? (openBlock(), createBlock(_component_el_icon, {
+                            key: 0,
+                            class: "is-loading",
+                            style: { "margin-right": "4px" }
+                          }, {
+                            default: withCtx(() => [
+                              createVNode(unref(loading_default))
+                            ]),
+                            _: 1
+                          })) : createCommentVNode("", true),
+                          _cache[7] || (_cache[7] = createTextVNode(" 从云端拉取 ", -1))
+                        ]),
+                        _: 1
+                      }, 8, ["disabled", "onClick"])
+                    ])) : createCommentVNode("", true)
+                  ]),
+                  hasProfileSetsRemoteAccount.value ? (openBlock(), createElementBlock("p", _hoisted_4$5, " 在列表中删除或编辑后，若希望服务器与其它设备一致，请点击「上传到云端」（用当前列表整表覆盖云端）。「从云端拉取」会用服务器列表覆盖本地。 ")) : (openBlock(), createElementBlock("p", _hoisted_5$5, " 在 [系统设置] 填写易投账号并保存全局设置后，可在此上传或拉取云端预设。 "))
+                ]),
+                __props.profileSets.length > 0 ? (openBlock(), createBlock(_component_el_table, {
+                  key: 0,
+                  data: __props.profileSets,
+                  border: "",
+                  size: "small",
+                  "max-height": "320",
+                  style: { "width": "100%" }
+                }, {
+                  default: withCtx(() => [
+                    createVNode(_component_el_table_column, {
+                      prop: "name",
+                      label: "名称",
+                      "min-width": "140",
+                      "show-overflow-tooltip": ""
+                    }),
+                    createVNode(_component_el_table_column, {
+                      label: "方案数",
+                      width: "88",
+                      align: "center"
+                    }, {
+                      default: withCtx(({ row }) => [
+                        createTextVNode(toDisplayString(validProfilesInSet(row).length), 1)
+                      ]),
+                      _: 1
+                    }),
+                    createVNode(_component_el_table_column, {
+                      label: "操作",
+                      width: "140",
+                      align: "center",
+                      fixed: "right"
+                    }, {
+                      default: withCtx(({ row }) => [
+                        createVNode(_component_el_button, {
+                          type: "primary",
+                          link: "",
+                          size: "small",
+                          onClick: ($event) => openEdit(row)
+                        }, {
+                          default: withCtx(() => [..._cache[8] || (_cache[8] = [
+                            createTextVNode(" 编辑 ", -1)
+                          ])]),
+                          _: 1
+                        }, 8, ["onClick"]),
+                        createVNode(_component_el_button, {
+                          type: "danger",
+                          link: "",
+                          size: "small",
+                          onClick: ($event) => removeProfileSet(row.id)
+                        }, {
+                          default: withCtx(() => [..._cache[9] || (_cache[9] = [
+                            createTextVNode(" 删除 ", -1)
+                          ])]),
+                          _: 1
+                        }, 8, ["onClick"])
+                      ]),
+                      _: 1
+                    })
+                  ]),
+                  _: 1
+                }, 8, ["data"])) : (openBlock(), createElementBlock("div", _hoisted_6$5, "暂无运行预设。可点「新建预设」，或在上方选好运行方案后使用「保存当前为预设」。"))
+              ], 64)) : (openBlock(), createElementBlock("div", _hoisted_7$5, [
+                createBaseVNode("div", _hoisted_8$5, [
+                  _cache[10] || (_cache[10] = createBaseVNode("span", { class: "form-label" }, "名称", -1)),
+                  createVNode(_component_el_input, {
+                    modelValue: profileSetForm.name,
+                    "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => profileSetForm.name = $event),
+                    maxlength: "40",
+                    "show-word-limit": "",
+                    placeholder: "为该运行预设起一个名字",
+                    clearable: ""
+                  }, null, 8, ["modelValue"])
+                ]),
+                createBaseVNode("div", _hoisted_9$5, [
+                  _cache[11] || (_cache[11] = createBaseVNode("span", { class: "form-label" }, "包含方案", -1)),
+                  createVNode(_component_el_select, {
+                    modelValue: profileSetForm.profiles,
+                    "onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => profileSetForm.profiles = $event),
+                    multiple: "",
+                    "collapse-tags": "",
+                    "collapse-tags-tooltip": "",
+                    filterable: "",
+                    clearable: "",
+                    placeholder: "搜索或在分组中选择 (支持多选)",
+                    style: { "width": "100%" }
+                  }, {
+                    default: withCtx(() => [
+                      (openBlock(true), createElementBlock(Fragment, null, renderList(groupedProfilesForSelect.value, (group) => {
+                        return openBlock(), createBlock(_component_el_option_group, {
+                          key: group.label,
+                          label: group.label
+                        }, {
+                          default: withCtx(() => [
+                            (openBlock(true), createElementBlock(Fragment, null, renderList(group.options, (name) => {
+                              return openBlock(), createBlock(_component_el_option, {
+                                key: name,
+                                label: name,
+                                value: name
+                              }, {
+                                default: withCtx(() => [
+                                  createBaseVNode("div", _hoisted_10$5, [
+                                    createBaseVNode("span", null, toDisplayString(name), 1),
+                                    createBaseVNode("span", _hoisted_11$5, toDisplayString(__props.allProfiles[name]?.businessType), 1)
+                                  ])
+                                ]),
+                                _: 2
+                              }, 1032, ["label", "value"]);
+                            }), 128))
+                          ]),
+                          _: 2
+                        }, 1032, ["label"]);
+                      }), 128))
+                    ]),
+                    _: 1
+                  }, 8, ["modelValue"])
+                ])
+              ]))
+            ]),
+            _: 1
+          }, 8, ["modelValue", "title"]);
+        };
+      }
+    };
+    const ProfileSetManageDialog = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["__scopeId", "data-v-ec2fb787"]]);
+    const _hoisted_1$4 = { class: "run-tab-container" };
+    const _hoisted_2$4 = { class: "path-link-wrapper" };
+    const _hoisted_3$4 = {
       key: 1,
       class: "file-none-text"
     };
-    const _hoisted_4$3 = { class: "card-header-actions profile-select-section" };
-    const _hoisted_5$3 = { class: "row-flex" };
-    const _hoisted_6$3 = {
+    const _hoisted_4$4 = { class: "card-header-actions profile-select-section" };
+    const _hoisted_5$4 = { class: "row-flex profile-set-row" };
+    const _hoisted_6$4 = { style: { "display": "flex", "justify-content": "space-between", "align-items": "center", "gap": "8px" } };
+    const _hoisted_7$4 = { style: { "color": "#909399", "font-size": "12px" } };
+    const _hoisted_8$4 = { class: "row-flex" };
+    const _hoisted_9$4 = { style: { "display": "flex", "justify-content": "space-between", "align-items": "center" } };
+    const _hoisted_10$4 = { style: { "color": "#909399", "font-size": "12px" } };
+    const _hoisted_11$4 = {
       key: 0,
       class: "selected-tags-box"
     };
-    const _hoisted_7$3 = { class: "detail-panel" };
-    const _hoisted_8$3 = { class: "form-row action-row" };
-    const _hoisted_9$3 = { class: "actions" };
-    const _hoisted_10$3 = ["innerHTML"];
-    const _hoisted_11$3 = {
+    const _hoisted_12$4 = { class: "detail-panel" };
+    const _hoisted_13$4 = { class: "form-row ranking-row" };
+    const _hoisted_14$3 = { class: "form-row action-row" };
+    const _hoisted_15$3 = { class: "actions" };
+    const _hoisted_16$3 = ["innerHTML"];
+    const _hoisted_17$3 = {
       key: 0,
       class: "log-empty"
     };
-    const _sfc_main$3 = {
+    const _sfc_main$4 = /* @__PURE__ */ Object.assign({
+      name: "RunTab"
+    }, {
       __name: "RunTab",
-      props: [
-        "allProfiles",
-        "logs",
-        "globalDramaList",
-        "isRunning"
-      ],
-      emits: ["run-task", "clear-logs", "update-global-drama"],
+      props: {
+        allProfiles: Object,
+        profileOrder: Array,
+        logs: Array,
+        globalDramaList: String,
+        isRunning: Boolean,
+        profileSets: { type: Array, default: () => [] },
+        /** 系统设置中的易投账号，用于方案集云端同步 */
+        workingAccount: { type: String, default: "" }
+      },
+      emits: ["run-task", "clear-logs", "update-global-drama", "update-profile-sets"],
       setup(__props, { emit: __emit }) {
         const props2 = __props;
         const emit2 = __emit;
         const isStopping = /* @__PURE__ */ ref(false);
+        const profileSetManageRef = /* @__PURE__ */ ref(null);
+        const {
+          isUploadingProfileSetsToCloud,
+          isDownloadingProfileSetsFromCloud,
+          uploadProfileSetsToCloud,
+          downloadProfileSetsFromCloud
+        } = useProfileSetsRemoteSync(
+          () => props2.profileSets,
+          () => (props2.workingAccount || "").trim(),
+          (list) => emit2("update-profile-sets", list),
+          () => {
+            selectedProfileSetId.value = "";
+          }
+        );
         const selectedProfiles = /* @__PURE__ */ ref([]);
         const logRef = /* @__PURE__ */ ref(null);
         const isDragging2 = /* @__PURE__ */ ref(false);
-        const form = /* @__PURE__ */ reactive({
-          action: "publish"
+        const form = /* @__PURE__ */ reactive({ action: "publishBeta", rankingType: "material" });
+        const selectedProfileSetId = /* @__PURE__ */ ref("");
+        const applyingProfileSet = /* @__PURE__ */ ref(false);
+        const profileSetDialogVisible = /* @__PURE__ */ ref(false);
+        const validProfilesInSet = (row) => {
+          const list = row?.profiles;
+          if (!Array.isArray(list) || !props2.allProfiles) return [];
+          return list.filter((name) => props2.allProfiles[name]);
+        };
+        const openProfileSetDialog = (mode, row) => {
+          const dlg = profileSetManageRef.value;
+          if (!dlg) return;
+          if (mode === "list") dlg.openList();
+          else if (mode === "create") dlg.openCreate();
+          else if (mode === "from-current") dlg.openFromCurrent(selectedProfiles.value);
+        };
+        const onProfileSetDialogApplied = ({ id, profiles }) => {
+          selectedProfileSetId.value = id;
+          applyingProfileSet.value = true;
+          selectedProfiles.value = [...profiles];
+          nextTick(() => {
+            applyingProfileSet.value = false;
+          });
+        };
+        const onProfileSetRemoved = (id) => {
+          if (selectedProfileSetId.value === id) selectedProfileSetId.value = "";
+        };
+        const onProfileSetSelectChange = (id) => {
+          if (!id) return;
+          const item = (props2.profileSets || []).find((s2) => s2.id === id);
+          if (!item) return;
+          const profiles = validProfilesInSet(item);
+          if (profiles.length === 0) {
+            ElMessage.warning("该预设内没有当前仍存在的方案，请在「管理预设」中重新编辑");
+            return;
+          }
+          applyingProfileSet.value = true;
+          selectedProfiles.value = profiles;
+          nextTick(() => {
+            applyingProfileSet.value = false;
+          });
+        };
+        watch(
+          selectedProfiles,
+          () => {
+            if (applyingProfileSet.value) return;
+            selectedProfileSetId.value = "";
+          },
+          { deep: true }
+        );
+        watch(
+          () => props2.profileSets,
+          () => {
+            const ids = new Set((props2.profileSets || []).map((s2) => s2.id));
+            if (selectedProfileSetId.value && !ids.has(selectedProfileSetId.value)) {
+              selectedProfileSetId.value = "";
+            }
+          },
+          { deep: true }
+        );
+        watch(
+          () => props2.allProfiles && Object.keys(props2.allProfiles).sort().join("\0"),
+          () => {
+            if (applyingProfileSet.value || !props2.allProfiles) return;
+            if (!selectedProfiles.value.length) return;
+            const next = selectedProfiles.value.filter((n) => props2.allProfiles[n]);
+            if (next.length === selectedProfiles.value.length) return;
+            applyingProfileSet.value = true;
+            selectedProfiles.value = next;
+            nextTick(() => {
+              applyingProfileSet.value = false;
+            });
+          }
+        );
+        const groupedProfilesForSelect = computed(() => {
+          if (!props2.allProfiles) return [];
+          const orderedNames = Array.isArray(props2.profileOrder) && props2.profileOrder.length > 0 ? props2.profileOrder.filter((name) => props2.allProfiles[name]) : Object.keys(props2.allProfiles);
+          const names2 = [
+            ...orderedNames,
+            ...Object.keys(props2.allProfiles).filter((name) => !orderedNames.includes(name))
+          ];
+          const groupsMap = /* @__PURE__ */ new Map();
+          groupsMap.set("默认分组", []);
+          names2.forEach((name) => {
+            const groupName = props2.allProfiles[name].group || "默认分组";
+            if (!groupsMap.has(groupName)) {
+              groupsMap.set(groupName, []);
+            }
+            groupsMap.get(groupName).push(name);
+          });
+          const result = [];
+          for (const [gName, pList] of groupsMap.entries()) {
+            if (pList.length > 0 || gName === "默认分组") {
+              result.push({
+                groupName: gName,
+                label: `📂 ${gName}`,
+                options: pList
+              });
+            }
+          }
+          return result;
         });
+        const hasAnyGroupProfiles = computed(
+          () => groupedProfilesForSelect.value.some((g) => g.options.length > 0)
+        );
+        const addGroupProfilesToSelection = (groupName) => {
+          const group = groupedProfilesForSelect.value.find((g) => g.groupName === groupName);
+          if (!group?.options?.length) return;
+          applyingProfileSet.value = true;
+          const seen = new Set(selectedProfiles.value);
+          const next = [...selectedProfiles.value];
+          for (const n of group.options) {
+            if (!seen.has(n)) {
+              seen.add(n);
+              next.push(n);
+            }
+          }
+          selectedProfiles.value = next;
+          nextTick(() => {
+            applyingProfileSet.value = false;
+          });
+        };
         const getFileName = (path) => path ? path.split(/[\\/]/).pop() : "";
         const removeSelectedProfile = (name) => {
           selectedProfiles.value = selectedProfiles.value.filter((p2) => p2 !== name);
@@ -82688,14 +83554,9 @@ var require_index_001 = __commonJS({
             window.api.openProfileFolder(name);
           }
         };
-        watch(
-          () => props2.isRunning,
-          (newVal) => {
-            if (newVal === false) {
-              isStopping.value = false;
-            }
-          }
-        );
+        watch(() => props2.isRunning, (newVal) => {
+          if (newVal === false) isStopping.value = false;
+        });
         const cancelTask = () => {
           if (window.api && window.api.stopTask) {
             isStopping.value = true;
@@ -82705,14 +83566,8 @@ var require_index_001 = __commonJS({
         const processImportFile = async (sourcePath) => {
           if (!sourcePath) return;
           const isExcel = sourcePath.toLowerCase().match(/\.(xlsx|xls|csv)$/);
-          if (!isExcel) {
-            ElMessage.error("请上传 Excel 或 CSV 格式的文件");
-            return;
-          }
-          const res = await window.api.importFile({
-            profileName: "global_assets",
-            sourcePath
-          });
+          if (!isExcel) return ElMessage.error("请上传 Excel 或 CSV 格式的文件");
+          const res = await window.api.importFile({ profileName: "global_assets", sourcePath });
           if (res.success) {
             emit2("update-global-drama", res.fileName);
             ElMessage.success("全局剧单已更新");
@@ -82730,23 +83585,13 @@ var require_index_001 = __commonJS({
           isDragging2.value = false;
           const file = event.dataTransfer?.files[0];
           if (!file) return;
-          let filePath = "";
-          if (window.api && window.api.getFilePath) {
-            filePath = window.api.getFilePath(file);
-          } else {
-            filePath = file.path;
-          }
-          if (filePath) {
-            processImportFile(filePath);
-          } else {
-            ElMessage.warning("无法读取文件路径，请点击选择");
-          }
+          const filePath = window.api?.getFilePath ? window.api.getFilePath(file) : file.path;
+          if (filePath) processImportFile(filePath);
+          else ElMessage.warning("无法读取文件路径");
         };
         const pickGlobalDrama = async () => {
           const sourcePath = await window.api.openFile();
-          if (sourcePath) {
-            processImportFile(sourcePath);
-          }
+          if (sourcePath) processImportFile(sourcePath);
         };
         const clearGlobalDrama = () => {
           emit2("update-global-drama", "");
@@ -82754,52 +83599,53 @@ var require_index_001 = __commonJS({
         };
         const handleOpenGlobalDrama = () => {
           if (props2.globalDramaList) {
-            window.api.openExternal({
-              profileName: "global_assets",
-              fileName: props2.globalDramaList
-            });
+            window.api.openExternal({ profileName: "global_assets", fileName: props2.globalDramaList });
           }
         };
         const start = () => {
           if (!props2.globalDramaList) return ElMessage.warning("请先选择全局剧单文件");
-          if (selectedProfiles.value.length === 0)
-            return ElMessage.warning("请至少选择一个运行方案");
+          if (selectedProfiles.value.length === 0) return ElMessage.warning("请至少选择一个运行方案");
           emit2("run-task", {
             selectedProfiles: selectedProfiles.value,
             globalDramaList: props2.globalDramaList,
-            action: form.action
+            action: form.action,
+            rankingType: form.rankingType
           });
         };
         const downloadTemplate = async () => {
-          if (window.api && window.api.downloadDramaTemplate) {
+          if (window.api?.downloadDramaTemplate) {
             const res = await window.api.downloadDramaTemplate();
-            if (res.success) {
-              ElMessage.success(`模板已成功保存至：${res.filePath}`);
-            } else if (res.msg !== "取消下载") {
-              ElMessage.error(`下载失败: ${res.msg}`);
-            }
+            if (res.success) ElMessage.success(`模板已保存至：${res.filePath}`);
+            else if (res.msg !== "取消下载") ElMessage.error(`下载失败: ${res.msg}`);
           }
         };
-        watch(
-          () => props2.logs,
-          () => {
-            nextTick(() => {
-              if (logRef.value) {
-                logRef.value.scrollTop = logRef.value.scrollHeight;
-              }
-            });
-          },
-          { deep: true }
-        );
+        const selectAllProfiles = () => {
+          if (props2.allProfiles) {
+            const orderedNames = Array.isArray(props2.profileOrder) && props2.profileOrder.length > 0 ? props2.profileOrder.filter((name) => props2.allProfiles[name]) : Object.keys(props2.allProfiles);
+            selectedProfiles.value = [
+              ...orderedNames,
+              ...Object.keys(props2.allProfiles).filter((name) => !orderedNames.includes(name))
+            ];
+          }
+        };
+        watch(() => props2.logs, () => {
+          nextTick(() => {
+            if (logRef.value) logRef.value.scrollTop = logRef.value.scrollHeight;
+          });
+        }, { deep: true });
         return (_ctx, _cache) => {
           const _component_el_icon = resolveComponent("el-icon");
           const _component_el_button = resolveComponent("el-button");
           const _component_el_option = resolveComponent("el-option");
           const _component_el_select = resolveComponent("el-select");
+          const _component_el_option_group = resolveComponent("el-option-group");
+          const _component_el_dropdown_item = resolveComponent("el-dropdown-item");
+          const _component_el_dropdown_menu = resolveComponent("el-dropdown-menu");
+          const _component_el_dropdown = resolveComponent("el-dropdown");
           const _component_el_tag = resolveComponent("el-tag");
           const _component_el_radio = resolveComponent("el-radio");
           const _component_el_radio_group = resolveComponent("el-radio-group");
-          return openBlock(), createElementBlock("div", _hoisted_1$3, [
+          return openBlock(), createElementBlock("div", _hoisted_1$4, [
             createBaseVNode("div", {
               class: normalizeClass(["card-header-actions global-drama-section", { "is-dragging": isDragging2.value }]),
               onDragover: withModifiers(onDragOver, ["prevent", "stop"]),
@@ -82807,8 +83653,8 @@ var require_index_001 = __commonJS({
               onDragleave: _cache[0] || (_cache[0] = withModifiers(($event) => isDragging2.value = false, ["prevent", "stop"])),
               onDrop: withModifiers(handleDrop, ["prevent", "stop"])
             }, [
-              _cache[8] || (_cache[8] = createBaseVNode("span", { style: { "width": "100px", "font-weight": "bold", "color": "#409eff", "flex-shrink": "0" } }, " 全局剧单： ", -1)),
-              createBaseVNode("div", _hoisted_2$3, [
+              _cache[16] || (_cache[16] = createBaseVNode("span", { style: { "width": "100px", "font-weight": "bold", "color": "#409eff", "flex-shrink": "0" } }, " 全局剧单： ", -1)),
+              createBaseVNode("div", _hoisted_2$4, [
                 __props.globalDramaList ? (openBlock(), createElementBlock("span", {
                   key: 0,
                   class: "file-link-text",
@@ -82822,14 +83668,14 @@ var require_index_001 = __commonJS({
                     _: 1
                   }),
                   createTextVNode(" " + toDisplayString(getFileName(__props.globalDramaList)), 1)
-                ])) : (openBlock(), createElementBlock("span", _hoisted_3$3, [
+                ])) : (openBlock(), createElementBlock("span", _hoisted_3$4, [
                   createVNode(_component_el_icon, null, {
                     default: withCtx(() => [
                       createVNode(unref(document_default))
                     ]),
                     _: 1
                   }),
-                  _cache[4] || (_cache[4] = createTextVNode(" 尚未选择（支持拖拽文件到此处） ", -1))
+                  _cache[12] || (_cache[12] = createTextVNode(" 尚未选择（支持拖拽文件到此处） ", -1))
                 ]))
               ]),
               createVNode(_component_el_button, {
@@ -82837,7 +83683,7 @@ var require_index_001 = __commonJS({
                 link: "",
                 onClick: downloadTemplate
               }, {
-                default: withCtx(() => [..._cache[5] || (_cache[5] = [
+                default: withCtx(() => [..._cache[13] || (_cache[13] = [
                   createTextVNode(" [下载模板] ", -1)
                 ])]),
                 _: 1
@@ -82847,7 +83693,7 @@ var require_index_001 = __commonJS({
                 link: "",
                 onClick: pickGlobalDrama
               }, {
-                default: withCtx(() => [..._cache[6] || (_cache[6] = [
+                default: withCtx(() => [..._cache[14] || (_cache[14] = [
                   createTextVNode(" [更换剧单] ", -1)
                 ])]),
                 _: 1
@@ -82858,39 +83704,216 @@ var require_index_001 = __commonJS({
                 link: "",
                 onClick: clearGlobalDrama
               }, {
-                default: withCtx(() => [..._cache[7] || (_cache[7] = [
+                default: withCtx(() => [..._cache[15] || (_cache[15] = [
                   createTextVNode(" [清除] ", -1)
                 ])]),
                 _: 1
               })) : createCommentVNode("", true)
             ], 34),
-            createBaseVNode("div", _hoisted_4$3, [
-              createBaseVNode("div", _hoisted_5$3, [
-                _cache[9] || (_cache[9] = createBaseVNode("span", { style: { "width": "100px", "font-weight": "bold", "flex-shrink": "0" } }, " 运行方案： ", -1)),
+            createBaseVNode("div", _hoisted_4$4, [
+              createBaseVNode("div", _hoisted_5$4, [
+                _cache[21] || (_cache[21] = createBaseVNode("span", { style: { "width": "100px", "font-weight": "bold", "flex-shrink": "0" } }, " 运行预设： ", -1)),
+                createVNode(_component_el_select, {
+                  modelValue: selectedProfileSetId.value,
+                  "onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => selectedProfileSetId.value = $event),
+                  clearable: "",
+                  filterable: "",
+                  placeholder: "选用已保存的一批运行方案（可跨分组）",
+                  style: { "flex": "1" },
+                  onChange: onProfileSetSelectChange
+                }, {
+                  default: withCtx(() => [
+                    (openBlock(true), createElementBlock(Fragment, null, renderList(__props.profileSets, (item) => {
+                      return openBlock(), createBlock(_component_el_option, {
+                        key: item.id,
+                        label: item.name,
+                        value: item.id
+                      }, {
+                        default: withCtx(() => [
+                          createBaseVNode("div", _hoisted_6$4, [
+                            createBaseVNode("span", null, toDisplayString(item.name), 1),
+                            createBaseVNode("span", _hoisted_7$4, toDisplayString(validProfilesInSet(item).length) + " 个方案 ", 1)
+                          ])
+                        ]),
+                        _: 2
+                      }, 1032, ["label", "value"]);
+                    }), 128))
+                  ]),
+                  _: 1
+                }, 8, ["modelValue"]),
+                createVNode(_component_el_button, {
+                  type: "primary",
+                  link: "",
+                  onClick: _cache[2] || (_cache[2] = ($event) => openProfileSetDialog("list"))
+                }, {
+                  default: withCtx(() => [..._cache[17] || (_cache[17] = [
+                    createTextVNode(" [管理预设] ", -1)
+                  ])]),
+                  _: 1
+                }),
+                createVNode(_component_el_button, {
+                  type: "success",
+                  link: "",
+                  disabled: selectedProfiles.value.length === 0,
+                  onClick: _cache[3] || (_cache[3] = ($event) => openProfileSetDialog("from-current"))
+                }, {
+                  default: withCtx(() => [..._cache[18] || (_cache[18] = [
+                    createTextVNode(" [保存当前为预设] ", -1)
+                  ])]),
+                  _: 1
+                }, 8, ["disabled"]),
+                createVNode(_component_el_button, {
+                  type: "warning",
+                  link: "",
+                  disabled: unref(isUploadingProfileSetsToCloud),
+                  onClick: unref(uploadProfileSetsToCloud)
+                }, {
+                  default: withCtx(() => [
+                    unref(isUploadingProfileSetsToCloud) ? (openBlock(), createBlock(_component_el_icon, {
+                      key: 0,
+                      class: "is-loading",
+                      style: { "margin-right": "4px" }
+                    }, {
+                      default: withCtx(() => [
+                        createVNode(unref(loading_default))
+                      ]),
+                      _: 1
+                    })) : createCommentVNode("", true),
+                    _cache[19] || (_cache[19] = createTextVNode(" [上传预设] ", -1))
+                  ]),
+                  _: 1
+                }, 8, ["disabled", "onClick"]),
+                createVNode(_component_el_button, {
+                  type: "primary",
+                  link: "",
+                  disabled: unref(isDownloadingProfileSetsFromCloud),
+                  onClick: unref(downloadProfileSetsFromCloud)
+                }, {
+                  default: withCtx(() => [
+                    unref(isDownloadingProfileSetsFromCloud) ? (openBlock(), createBlock(_component_el_icon, {
+                      key: 0,
+                      class: "is-loading",
+                      style: { "margin-right": "4px" }
+                    }, {
+                      default: withCtx(() => [
+                        createVNode(unref(loading_default))
+                      ]),
+                      _: 1
+                    })) : createCommentVNode("", true),
+                    _cache[20] || (_cache[20] = createTextVNode(" [从云端拉取预设] ", -1))
+                  ]),
+                  _: 1
+                }, 8, ["disabled", "onClick"])
+              ]),
+              createBaseVNode("div", _hoisted_8$4, [
+                _cache[25] || (_cache[25] = createBaseVNode("span", { style: { "width": "100px", "font-weight": "bold", "flex-shrink": "0" } }, " 运行方案： ", -1)),
                 createVNode(_component_el_select, {
                   modelValue: selectedProfiles.value,
-                  "onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => selectedProfiles.value = $event),
+                  "onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => selectedProfiles.value = $event),
                   multiple: "",
                   "collapse-tags": "",
                   "collapse-tags-tooltip": "",
                   filterable: "",
                   clearable: "",
-                  placeholder: "可输入关键词搜索方案 (支持多选)",
+                  placeholder: "搜索或在分组中选择 (支持多选)",
                   style: { "flex": "1" }
                 }, {
                   default: withCtx(() => [
-                    (openBlock(true), createElementBlock(Fragment, null, renderList(__props.allProfiles, (p2, name) => {
-                      return openBlock(), createBlock(_component_el_option, {
-                        key: name,
-                        label: name,
-                        value: name
-                      }, null, 8, ["label", "value"]);
+                    (openBlock(true), createElementBlock(Fragment, null, renderList(groupedProfilesForSelect.value, (group) => {
+                      return openBlock(), createBlock(_component_el_option_group, {
+                        key: group.label,
+                        label: group.label
+                      }, {
+                        default: withCtx(() => [
+                          (openBlock(true), createElementBlock(Fragment, null, renderList(group.options, (name) => {
+                            return openBlock(), createBlock(_component_el_option, {
+                              key: name,
+                              label: name,
+                              value: name
+                            }, {
+                              default: withCtx(() => [
+                                createBaseVNode("div", _hoisted_9$4, [
+                                  createBaseVNode("span", null, toDisplayString(name), 1),
+                                  createBaseVNode("span", _hoisted_10$4, toDisplayString(__props.allProfiles[name]?.businessType), 1)
+                                ])
+                              ]),
+                              _: 2
+                            }, 1032, ["label", "value"]);
+                          }), 128))
+                        ]),
+                        _: 2
+                      }, 1032, ["label"]);
                     }), 128))
                   ]),
                   _: 1
-                }, 8, ["modelValue"])
+                }, 8, ["modelValue"]),
+                createVNode(_component_el_button, {
+                  type: "primary",
+                  link: "",
+                  onClick: selectAllProfiles,
+                  style: { "margin-left": "10px" }
+                }, {
+                  default: withCtx(() => [..._cache[22] || (_cache[22] = [
+                    createTextVNode(" [全选] ", -1)
+                  ])]),
+                  _: 1
+                }),
+                createVNode(_component_el_dropdown, {
+                  trigger: "click",
+                  disabled: !hasAnyGroupProfiles.value,
+                  onCommand: addGroupProfilesToSelection
+                }, {
+                  dropdown: withCtx(() => [
+                    createVNode(_component_el_dropdown_menu, null, {
+                      default: withCtx(() => [
+                        (openBlock(true), createElementBlock(Fragment, null, renderList(groupedProfilesForSelect.value, (g) => {
+                          return openBlock(), createBlock(_component_el_dropdown_item, {
+                            key: g.groupName,
+                            command: g.groupName,
+                            disabled: !g.options.length
+                          }, {
+                            default: withCtx(() => [
+                              createTextVNode(toDisplayString(g.groupName) + "（" + toDisplayString(g.options.length) + "） ", 1)
+                            ]),
+                            _: 2
+                          }, 1032, ["command", "disabled"]);
+                        }), 128))
+                      ]),
+                      _: 1
+                    })
+                  ]),
+                  default: withCtx(() => [
+                    createVNode(_component_el_button, {
+                      type: "primary",
+                      link: "",
+                      style: { "margin-left": "4px" }
+                    }, {
+                      default: withCtx(() => [
+                        _cache[23] || (_cache[23] = createTextVNode(" [按分组追加] ", -1)),
+                        createVNode(_component_el_icon, { class: "dropdown-caret" }, {
+                          default: withCtx(() => [
+                            createVNode(unref(arrow_down_default))
+                          ]),
+                          _: 1
+                        })
+                      ]),
+                      _: 1
+                    })
+                  ]),
+                  _: 1
+                }, 8, ["disabled"]),
+                createVNode(_component_el_button, {
+                  type: "danger",
+                  link: "",
+                  onClick: _cache[5] || (_cache[5] = ($event) => selectedProfiles.value = [])
+                }, {
+                  default: withCtx(() => [..._cache[24] || (_cache[24] = [
+                    createTextVNode(" [清空] ", -1)
+                  ])]),
+                  _: 1
+                })
               ]),
-              selectedProfiles.value.length > 0 ? (openBlock(), createElementBlock("div", _hoisted_6$3, [
+              selectedProfiles.value.length > 0 ? (openBlock(), createElementBlock("div", _hoisted_11$4, [
                 (openBlock(true), createElementBlock(Fragment, null, renderList(selectedProfiles.value, (name) => {
                   return openBlock(), createBlock(_component_el_tag, {
                     key: name,
@@ -82911,20 +83934,67 @@ var require_index_001 = __commonJS({
                 }), 128))
               ])) : createCommentVNode("", true)
             ]),
-            createBaseVNode("div", _hoisted_7$3, [
-              createBaseVNode("div", _hoisted_8$3, [
-                _cache[12] || (_cache[12] = createBaseVNode("span", { class: "label-text" }, "运行动作：", -1)),
+            createBaseVNode("div", _hoisted_12$4, [
+              createBaseVNode("div", _hoisted_13$4, [
+                _cache[29] || (_cache[29] = createBaseVNode("span", { class: "label-text" }, "榜单选择：", -1)),
+                createVNode(_component_el_radio_group, {
+                  modelValue: form.rankingType,
+                  "onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => form.rankingType = $event)
+                }, {
+                  default: withCtx(() => [
+                    createVNode(_component_el_radio, {
+                      value: "material",
+                      size: "large"
+                    }, {
+                      default: withCtx(() => [..._cache[26] || (_cache[26] = [
+                        createTextVNode("素材榜单", -1)
+                      ])]),
+                      _: 1
+                    }),
+                    createVNode(_component_el_radio, {
+                      value: "company",
+                      size: "large"
+                    }, {
+                      default: withCtx(() => [..._cache[27] || (_cache[27] = [
+                        createTextVNode("公司榜单", -1)
+                      ])]),
+                      _: 1
+                    }),
+                    createVNode(_component_el_radio, {
+                      value: "library",
+                      size: "large"
+                    }, {
+                      default: withCtx(() => [..._cache[28] || (_cache[28] = [
+                        createTextVNode("素材库", -1)
+                      ])]),
+                      _: 1
+                    })
+                  ]),
+                  _: 1
+                }, 8, ["modelValue"])
+              ]),
+              createBaseVNode("div", _hoisted_14$3, [
+                _cache[33] || (_cache[33] = createBaseVNode("span", { class: "label-text" }, "运行动作：", -1)),
                 createVNode(_component_el_radio_group, {
                   modelValue: form.action,
-                  "onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => form.action = $event)
+                  "onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => form.action = $event)
                 }, {
                   default: withCtx(() => [
                     createVNode(_component_el_radio, {
                       value: "publish",
                       size: "large"
                     }, {
-                      default: withCtx(() => [..._cache[10] || (_cache[10] = [
+                      default: withCtx(() => [..._cache[30] || (_cache[30] = [
                         createBaseVNode("span", { style: { "color": "#f56c6c", "font-weight": "bold" } }, "正式发布", -1)
+                      ])]),
+                      _: 1
+                    }),
+                    createVNode(_component_el_radio, {
+                      value: "publishBeta",
+                      size: "large"
+                    }, {
+                      default: withCtx(() => [..._cache[31] || (_cache[31] = [
+                        createTextVNode("正式发布(Beta版)", -1)
                       ])]),
                       _: 1
                     }),
@@ -82932,7 +84002,7 @@ var require_index_001 = __commonJS({
                       value: "cancel",
                       size: "large"
                     }, {
-                      default: withCtx(() => [..._cache[11] || (_cache[11] = [
+                      default: withCtx(() => [..._cache[32] || (_cache[32] = [
                         createTextVNode("测试模式", -1)
                       ])]),
                       _: 1
@@ -82942,7 +84012,7 @@ var require_index_001 = __commonJS({
                 }, 8, ["modelValue"])
               ])
             ]),
-            createBaseVNode("div", _hoisted_9$3, [
+            createBaseVNode("div", _hoisted_15$3, [
               !__props.isRunning ? (openBlock(), createBlock(_component_el_button, {
                 key: 0,
                 type: "success",
@@ -82951,7 +84021,7 @@ var require_index_001 = __commonJS({
                 icon: unref(video_play_default),
                 onClick: start
               }, {
-                default: withCtx(() => [..._cache[13] || (_cache[13] = [
+                default: withCtx(() => [..._cache[34] || (_cache[34] = [
                   createTextVNode(" 启动自动化任务 (多方案队列) ", -1)
                 ])]),
                 _: 1
@@ -82981,9 +84051,9 @@ var require_index_001 = __commonJS({
                 type: "info",
                 size: "large",
                 icon: unref(delete_default),
-                onClick: _cache[3] || (_cache[3] = ($event) => _ctx.$emit("clear-logs"))
+                onClick: _cache[8] || (_cache[8] = ($event) => _ctx.$emit("clear-logs"))
               }, {
-                default: withCtx(() => [..._cache[14] || (_cache[14] = [
+                default: withCtx(() => [..._cache[35] || (_cache[35] = [
                   createTextVNode(" 清空日志 ", -1)
                 ])]),
                 _: 1
@@ -82999,261 +84069,254 @@ var require_index_001 = __commonJS({
                   key: i,
                   class: "log-line",
                   innerHTML: log
-                }, null, 8, _hoisted_10$3);
+                }, null, 8, _hoisted_16$3);
               }), 128)),
-              __props.logs.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_11$3, "⏳ 等待指令启动...")) : createCommentVNode("", true)
-            ], 512)
+              __props.logs.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_17$3, "⏳ 等待指令启动...")) : createCommentVNode("", true)
+            ], 512),
+            createVNode(ProfileSetManageDialog, {
+              ref_key: "profileSetManageRef",
+              ref: profileSetManageRef,
+              modelValue: profileSetDialogVisible.value,
+              "onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => profileSetDialogVisible.value = $event),
+              "all-profiles": __props.allProfiles,
+              "profile-order": __props.profileOrder,
+              "profile-sets": __props.profileSets,
+              "working-account": __props.workingAccount,
+              onUpdateProfileSets: _cache[10] || (_cache[10] = (v2) => emit2("update-profile-sets", v2)),
+              onApplied: onProfileSetDialogApplied,
+              onClearedSelectedPreset: _cache[11] || (_cache[11] = ($event) => selectedProfileSetId.value = ""),
+              onRemovePreset: onProfileSetRemoved
+            }, null, 8, ["modelValue", "all-profiles", "profile-order", "profile-sets", "working-account"])
           ]);
         };
       }
+    });
+    const RunTab = /* @__PURE__ */ _export_sfc(_sfc_main$4, [["__scopeId", "data-v-8c9f34dd"]]);
+    const _hoisted_1$3 = { class: "config-container" };
+    const _hoisted_2$3 = { class: "sidebar" };
+    const _hoisted_3$3 = { class: "sidebar-header" };
+    const _hoisted_4$3 = { style: { "display": "flex", "align-items": "center", "margin-bottom": "10px" } };
+    const _hoisted_5$3 = { class: "sidebar-list" };
+    const _hoisted_6$3 = ["onClick", "onDrop"];
+    const _hoisted_7$3 = { style: { "flex": "1" } };
+    const _hoisted_8$3 = ["onClick"];
+    const _hoisted_9$3 = ["draggable", "onDragstart", "onDrop", "onClick"];
+    const _hoisted_10$3 = {
+      key: 1,
+      class: "item-icon"
     };
-    const RunTab = /* @__PURE__ */ _export_sfc(_sfc_main$3, [["__scopeId", "data-v-ad6a8d2a"]]);
-    const _hoisted_1$2 = { class: "config-container" };
-    const _hoisted_2$2 = { class: "sidebar" };
-    const _hoisted_3$2 = { class: "sidebar-header" };
-    const _hoisted_4$2 = { class: "sidebar-list" };
-    const _hoisted_5$2 = ["onClick"];
-    const _hoisted_6$2 = { class: "item-icon" };
-    const _hoisted_7$2 = { class: "item-content" };
-    const _hoisted_8$2 = { class: "item-title" };
-    const _hoisted_9$2 = { class: "item-desc" };
-    const _hoisted_10$2 = ["onClick"];
-    const _hoisted_11$2 = {
+    const _hoisted_11$3 = { class: "item-content" };
+    const _hoisted_12$3 = ["title"];
+    const _hoisted_13$3 = { class: "item-desc" };
+    const _hoisted_14$2 = ["onClick"];
+    const _hoisted_15$2 = {
       key: 0,
       class: "empty-list"
     };
-    const _hoisted_12$1 = { key: 0 };
-    const _hoisted_13$1 = { key: 1 };
-    const _hoisted_14$1 = { class: "sidebar-footer" };
-    const _hoisted_15$1 = { class: "main-content" };
-    const _hoisted_16$1 = { class: "header-toolbar" };
-    const _hoisted_17$1 = { class: "header-left" };
-    const _hoisted_18$1 = { class: "header-title" };
-    const _hoisted_19$1 = { class: "header-right" };
-    const _hoisted_20$1 = { class: "detail-scroll-area" };
-    const _hoisted_21$1 = { class: "form-row" };
-    const _hoisted_22$1 = { class: "form-item half" };
-    const _hoisted_23 = { class: "form-item half" };
-    const _hoisted_24 = { class: "file-label" };
-    const _hoisted_25 = {
+    const _hoisted_16$2 = { key: 0 };
+    const _hoisted_17$2 = { key: 1 };
+    const _hoisted_18$2 = {
+      key: 0,
+      class: "sidebar-footer batch-footer"
+    };
+    const _hoisted_19$2 = { class: "batch-count" };
+    const _hoisted_20$2 = { class: "batch-btns" };
+    const _hoisted_21$2 = {
+      key: 1,
+      class: "sidebar-footer"
+    };
+    const _hoisted_22$2 = {
+      key: 1,
+      style: { "margin-right": "4px" }
+    };
+    const _hoisted_23$1 = { key: 2 };
+    const _hoisted_24$1 = { key: 3 };
+    const _hoisted_25$1 = {
+      key: 1,
+      style: { "margin-right": "4px" }
+    };
+    const _hoisted_26$1 = { class: "main-content" };
+    const _hoisted_27$1 = { style: { "display": "flex", "margin-top": "19px" } };
+    const _hoisted_28$1 = { class: "header-toolbar" };
+    const _hoisted_29$1 = { class: "header-left" };
+    const _hoisted_30$1 = { class: "header-title" };
+    const _hoisted_31$1 = { class: "header-right" };
+    const _hoisted_32$1 = { class: "detail-scroll-area" };
+    const _hoisted_33$1 = { class: "form-row" };
+    const _hoisted_34$1 = { class: "form-item half" };
+    const _hoisted_35$1 = { class: "form-item half" };
+    const _hoisted_36$1 = { class: "form-row" };
+    const _hoisted_37$1 = { class: "form-item" };
+    const _hoisted_38$1 = { class: "form-row" };
+    const _hoisted_39 = { class: "form-item half" };
+    const _hoisted_40 = { style: { "display": "flex", "align-items": "center", "gap": "12px", "flex-wrap": "wrap" } };
+    const _hoisted_41 = { style: { "display": "flex", "align-items": "center", "gap": "8px" } };
+    const _hoisted_42 = { class: "file-label" };
+    const _hoisted_43 = {
       key: 0,
       class: "status-tag unconfigured"
     };
-    const _hoisted_26 = {
+    const _hoisted_44 = {
       key: 1,
       class: "status-tag configured"
     };
-    const _hoisted_27 = ["onClick", "onDrop"];
-    const _hoisted_28 = { class: "file-info" };
-    const _hoisted_29 = { class: "file-main" };
-    const _hoisted_30 = { class: "file-name" };
-    const _hoisted_31 = { class: "file-sub" };
-    const _hoisted_32 = {
+    const _hoisted_45 = ["onClick", "onDrop"];
+    const _hoisted_46 = { class: "file-info" };
+    const _hoisted_47 = { class: "file-main" };
+    const _hoisted_48 = { class: "file-name" };
+    const _hoisted_49 = { class: "file-sub" };
+    const _hoisted_50 = {
       key: 1,
       class: "placeholder-info"
     };
-    const _hoisted_33 = { class: "save-footer" };
-    const _sfc_main$2 = {
+    const _hoisted_51 = { class: "save-footer" };
+    const _hoisted_52 = { style: { "margin-bottom": "15px", "font-size": "14px", "color": "#606266" } };
+    const _hoisted_53 = { class: "dialog-footer" };
+    const _hoisted_54 = { style: { "margin-bottom": "20px", "font-size": "14px", "color": "#606266" } };
+    const _hoisted_55 = { style: { "color": "#409eff" } };
+    const _hoisted_56 = { class: "dialog-footer" };
+    const _hoisted_57 = { class: "dialog-footer" };
+    const _hoisted_58 = { class: "clear-result-summary" };
+    const _hoisted_59 = { class: "clear-result-list" };
+    let globalPersistentSnapshot = null;
+    let globalLastSavedGroup = "默认分组";
+    const _sfc_main$3 = /* @__PURE__ */ Object.assign({
+      name: "ConfigTab"
+    }, {
       __name: "ConfigTab",
-      props: ["allProfiles", "userKey"],
-      emits: ["update-profiles"],
+      props: ["allProfiles", "profileOrder", "userKey", "globalAccountMatchCount"],
+      emits: ["update-profiles", "update-profile-sets"],
       setup(__props, { emit: __emit }) {
         const props2 = __props;
         const emit2 = __emit;
+        const getDefaultAccountMatchCount = () => {
+          const n = parseInt(props2.globalAccountMatchCount, 10);
+          return Number.isFinite(n) && n > 0 ? n : 2;
+        };
+        const buildNextOrder = (profiles, preferredOrder = null) => {
+          const existed = Array.isArray(preferredOrder) && preferredOrder.length > 0 ? preferredOrder.filter((name) => profiles[name]) : [];
+          const leftovers = Object.keys(profiles).filter((name) => !existed.includes(name));
+          return [...existed, ...leftovers];
+        };
+        const emitProfilesUpdate = (profiles, preferredOrder = null) => {
+          emit2("update-profiles", {
+            profiles,
+            profileOrder: buildNextOrder(profiles, preferredOrder || props2.profileOrder)
+          });
+        };
         const localSelectedName = /* @__PURE__ */ ref("");
         const targetName = /* @__PURE__ */ ref("");
         const searchKeyword = /* @__PURE__ */ ref("");
         const isSaving = /* @__PURE__ */ ref(false);
         const isCloudUploading = /* @__PURE__ */ ref(false);
         const isCloudDownloading = /* @__PURE__ */ ref(false);
-        const labelMap = {
-          TEMPLATE: "任务模板",
-          ACCOUNTS: "账号列表"
+        const collapsedGroups = /* @__PURE__ */ ref(/* @__PURE__ */ new Set(["默认分组"]));
+        const knownGroupNames = /* @__PURE__ */ ref(/* @__PURE__ */ new Set(["默认分组"]));
+        const manualEmptyGroups = /* @__PURE__ */ ref(/* @__PURE__ */ new Set(["默认分组"]));
+        const lastSavedGroup = /* @__PURE__ */ ref(globalLastSavedGroup);
+        const cloudSnapshot = /* @__PURE__ */ ref(globalPersistentSnapshot);
+        const localFilesDirty = /* @__PURE__ */ ref(false);
+        const getSnapshotString = (profilesObj, emptyGroupsSet) => {
+          if (!profilesObj) return "";
+          const profileList = Object.keys(profilesObj).sort().map((name) => ({
+            n: name,
+            g: profilesObj[name].group || "默认分组",
+            t: profilesObj[name].businessType,
+            f: profilesObj[name].files,
+            m: profilesObj[name].accountMatchCount ?? null,
+            em: profilesObj[name].enableCustomAccountMatchCount === true
+          }));
+          const groups = Array.from(emptyGroupsSet).sort();
+          return JSON.stringify({ p: profileList, g: groups });
         };
-        const editingForm = /* @__PURE__ */ reactive({
-          businessType: "端原生-付费短剧",
-          files: { TEMPLATE: "", ACCOUNTS: "" }
+        const hasUnsyncedChanges = computed(() => {
+          if (!cloudSnapshot.value) return false;
+          const current = getSnapshotString(props2.allProfiles, manualEmptyGroups.value);
+          return current !== cloudSnapshot.value;
         });
-        const filteredProfileNames = computed(() => {
-          const keys2 = Object.keys(props2.allProfiles);
-          if (!searchKeyword.value) return keys2;
-          return keys2.filter(
-            (name) => name.toLowerCase().includes(searchKeyword.value.toLowerCase())
-          );
+        const needsCloudBackup = computed(() => hasUnsyncedChanges.value || localFilesDirty.value);
+        onMounted(() => {
+          if (!cloudSnapshot.value && props2.allProfiles && Object.keys(props2.allProfiles).length > 0) {
+            const initial2 = getSnapshotString(props2.allProfiles, manualEmptyGroups.value);
+            cloudSnapshot.value = initial2;
+            globalPersistentSnapshot = initial2;
+          }
         });
-        const isNewMode = computed(
-          () => !localSelectedName.value || !props2.allProfiles[localSelectedName.value]
-        );
-        const getFileName = (path) => path ? path.split(/[\\/]/).pop() : "";
-        const initNewProfile = () => {
-          localSelectedName.value = "";
-          targetName.value = "";
-          editingForm.businessType = "端原生-付费短剧";
-          editingForm.files = { TEMPLATE: "", ACCOUNTS: "" };
-        };
-        const selectProfile = (name) => {
-          if (props2.allProfiles[name]) {
-            localSelectedName.value = name;
-            targetName.value = name;
-            const p2 = props2.allProfiles[name];
-            editingForm.businessType = p2.businessType;
-            editingForm.files = {
-              TEMPLATE: p2.files.TEMPLATE || "",
-              ACCOUNTS: p2.files.ACCOUNTS || ""
-            };
-          }
-        };
-        const deleteProfileName = (name) => {
-          ElMessageBox.confirm(
-            `确定删除方案 [${name}] 吗？
-这将同时删除其下属的所有物理文件，无法恢复。`,
-            "高能预警",
-            {
-              type: "warning",
-              confirmButtonText: "彻底删除",
-              cancelButtonText: "取消"
-            }
-          ).then(async () => {
-            try {
-              await window.api.deleteProfileFolder(name);
-              ElMessage.success("物理文件清理完毕");
-            } catch (e) {
-              console.error("物理删除失败", e);
-            }
-            const profiles = { ...props2.allProfiles };
-            delete profiles[name];
-            emit2("update-profiles", profiles);
-            if (localSelectedName.value === name) {
-              initNewProfile();
-            }
-          }).catch(() => {
-          });
-        };
-        const updateFilePath = (key, path) => {
-          editingForm.files[key] = path;
-          ElMessage.info("文件已暂存");
-        };
-        const triggerFileSelect = async (key) => {
-          const sourcePath = await window.api.openFile();
-          if (sourcePath) updateFilePath(key, sourcePath);
-        };
-        const onDragOver = (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          event.dataTransfer.dropEffect = "copy";
-        };
-        const handleDrop = (event, key) => {
-          const file = event.dataTransfer?.files[0];
-          if (!file) return;
-          let filePath = "";
-          if (window.api && window.api.getFilePath) {
-            filePath = window.api.getFilePath(file);
-          } else {
-            filePath = file.path;
-          }
-          if (filePath) {
-            updateFilePath(key, filePath);
-          } else {
-            ElMessage.warning("无法读取文件路径，请点击选择");
-          }
-        };
-        const handleMainSave = async () => {
-          const newName = targetName.value.trim();
-          if (!newName) return ElMessage.warning("请输入方案名称");
-          isSaving.value = true;
-          const loadingInstance = ElLoading.service({
-            target: ".detail-card",
-            text: "本地文件入库中..."
-          });
-          try {
-            const finalFiles = { ...editingForm.files };
-            for (const key in finalFiles) {
-              const sourcePath = finalFiles[key];
-              if (sourcePath && (sourcePath.includes(":") || sourcePath.includes("/") || sourcePath.includes("\\"))) {
-                const res = await window.api.importFile({
-                  profileName: newName,
-                  sourcePath
-                });
-                if (res.success) {
-                  finalFiles[key] = res.fileName;
-                } else {
-                  throw new Error(`[${labelMap[key]}] 导入失败: ${res.msg}`);
-                }
+        watch(
+          () => props2.allProfiles,
+          (newProfiles) => {
+            if (!newProfiles) return;
+            const newSet = new Set(manualEmptyGroups.value);
+            Object.values(newProfiles).forEach((p2) => {
+              if (p2.group) newSet.add(p2.group);
+            });
+            manualEmptyGroups.value = newSet;
+            const nextCollapsed = new Set(collapsedGroups.value);
+            const nextKnownGroups = new Set(knownGroupNames.value);
+            newSet.forEach((groupName) => {
+              if (!nextKnownGroups.has(groupName)) {
+                nextKnownGroups.add(groupName);
+                nextCollapsed.add(groupName);
               }
+            });
+            knownGroupNames.value = nextKnownGroups;
+            collapsedGroups.value = nextCollapsed;
+            if (!cloudSnapshot.value && Object.keys(newProfiles).length > 0) {
+              const initial2 = getSnapshotString(newProfiles, newSet);
+              cloudSnapshot.value = initial2;
+              globalPersistentSnapshot = initial2;
             }
-            const profiles = JSON.parse(JSON.stringify(props2.allProfiles));
-            if (localSelectedName.value && localSelectedName.value !== newName) {
-              delete profiles[localSelectedName.value];
-            }
-            profiles[newName] = { ...editingForm, files: finalFiles };
-            emit2("update-profiles", profiles);
-            localSelectedName.value = newName;
-            editingForm.files = finalFiles;
-            ElMessage.success("保存成功");
-          } catch (error) {
-            ElMessage.error(error.message);
-          } finally {
-            isSaving.value = false;
-            loadingInstance.close();
-          }
-        };
+          },
+          { immediate: true, deep: true }
+        );
         const handleCloudUpload = async () => {
-          if (!props2.userKey)
-            return ElMessage.warning("请先在系统设置中填写并验证卡密");
+          if (!props2.userKey) return ElMessage.warning("请先在系统设置中填写并验证卡密");
           isCloudUploading.value = true;
-          const loading = ElLoading.service({
-            lock: true,
-            text: "📦 正在将全部方案与物理文件打包同步至云端...",
-            background: "rgba(0, 0, 0, 0.7)"
-          });
+          const loading = ElLoading.service({ lock: true, text: "📦 同步中...", background: "rgba(0, 0, 0, 0.7)" });
           try {
             const cleanProfiles = JSON.parse(JSON.stringify(props2.allProfiles));
-            const res = await window.api.cloudSave({
-              userKey: props2.userKey,
-              profiles: cleanProfiles
-            });
+            const res = await window.api.cloudSave({ userKey: props2.userKey, profiles: cleanProfiles });
             if (res.status === "ok") {
-              ElMessage.success(res.msg || "备份成功！数据已安全存入云端硬盘。");
+              ElMessage.success("备份成功！");
+              const newSnapshot = getSnapshotString(props2.allProfiles, manualEmptyGroups.value);
+              cloudSnapshot.value = newSnapshot;
+              globalPersistentSnapshot = newSnapshot;
+              localFilesDirty.value = false;
             } else {
               ElMessage.error(res.msg);
             }
           } catch (error) {
-            console.error("备份底层报错:", error);
-            ElMessage.error("同步失败，请检查网络或控制台日志");
+            ElMessage.error("同步失败");
           } finally {
             isCloudUploading.value = false;
             loading.close();
           }
         };
         const handleCloudDownload = async () => {
-          if (!props2.userKey)
-            return ElMessage.warning("请先在系统设置中填写并验证卡密");
-          ElMessageBox.confirm(
-            "⚠️ 从云端恢复将覆盖本地现有的所有方案与物理文件，此操作不可逆，确定继续吗？",
-            "恢复高能预警",
-            {
-              type: "warning",
-              confirmButtonText: "确定覆盖恢复",
-              cancelButtonText: "取消"
-            }
-          ).then(async () => {
+          if (!props2.userKey) return ElMessage.warning("请先在系统设置中填写并验证卡密");
+          ElMessageBox.confirm("⚠️ 覆盖本地现有方案？", "预警", { type: "warning" }).then(async () => {
             isCloudDownloading.value = true;
-            const loading = ElLoading.service({
-              lock: true,
-              text: "📥 正在从云端拉取主账号数据并解压，请勿关闭程序...",
-              background: "rgba(0, 0, 0, 0.7)"
-            });
+            const loading = ElLoading.service({ lock: true, text: "📥 恢复中...", background: "rgba(0, 0, 0, 0.7)" });
             try {
               const res = await window.api.cloudGet(props2.userKey);
               if (res.status === "ok") {
-                emit2("update-profiles", res.data);
-                ElMessage.success("云端数据恢复成功！你的方案配置与文件已还原。");
+                manualEmptyGroups.value = /* @__PURE__ */ new Set(["默认分组"]);
+                emitProfilesUpdate(res.data, Object.keys(res.data || {}));
+                if (res.profileSetsUpdatedFromBackup && Array.isArray(res.profileSets)) {
+                  emit2("update-profile-sets", res.profileSets);
+                }
                 initNewProfile();
+                nextTick(() => {
+                  const s2 = getSnapshotString(res.data, manualEmptyGroups.value);
+                  cloudSnapshot.value = s2;
+                  globalPersistentSnapshot = s2;
+                  localFilesDirty.value = false;
+                });
               } else {
                 ElMessage.error(res.msg);
               }
-            } catch (error) {
-              ElMessage.error("恢复失败，无法连接到云端服务器");
+            } catch (e) {
+              ElMessage.error("恢复失败");
             } finally {
               isCloudDownloading.value = false;
               loading.close();
@@ -83261,127 +84324,668 @@ var require_index_001 = __commonJS({
           }).catch(() => {
           });
         };
-        const openFolder = (name) => window.api.openProfileFolder(name);
-        const openExternal = (path) => {
-          if (!path) return;
-          if (path.includes(":") || path.includes("/") || path.includes("\\")) {
-            window.api.openExternal(path);
-          } else {
-            window.api.openExternal({
-              profileName: localSelectedName.value,
-              fileName: path
-            });
+        const existingGroups = computed(() => {
+          const groups = new Set(manualEmptyGroups.value);
+          Object.values(props2.allProfiles).forEach((p2) => {
+            if (p2.group) groups.add(p2.group);
+          });
+          const arr = Array.from(groups).filter((g) => g !== "默认分组");
+          return ["默认分组", ...arr];
+        });
+        const groupedProfiles = computed(() => {
+          const orderedKeys = Array.isArray(props2.profileOrder) && props2.profileOrder.length > 0 ? props2.profileOrder.filter((name) => props2.allProfiles[name]) : Object.keys(props2.allProfiles);
+          const extraKeys = Object.keys(props2.allProfiles).filter((name) => !orderedKeys.includes(name));
+          const keys2 = [...orderedKeys, ...extraKeys];
+          let filteredKeys = keys2;
+          if (searchKeyword.value) filteredKeys = keys2.filter((n) => n.toLowerCase().includes(searchKeyword.value.toLowerCase()));
+          const rawGroups = /* @__PURE__ */ new Map();
+          if (!searchKeyword.value) manualEmptyGroups.value.forEach((g) => rawGroups.set(g, []));
+          filteredKeys.forEach((name) => {
+            const gName = props2.allProfiles[name]?.group || "默认分组";
+            if (!rawGroups.has(gName)) rawGroups.set(gName, []);
+            rawGroups.get(gName).push(name);
+          });
+          const finalArray = [];
+          if (rawGroups.has("默认分组") || !searchKeyword.value) {
+            finalArray.push({ groupName: "默认分组", groupProfiles: rawGroups.get("默认分组") || [] });
           }
+          for (const [gName, pList] of rawGroups.entries()) {
+            if (gName !== "默认分组") finalArray.push({ groupName: gName, groupProfiles: pList });
+          }
+          return finalArray;
+        });
+        const isNewMode = computed(() => !localSelectedName.value || !props2.allProfiles[localSelectedName.value]);
+        const labelMap = { TEMPLATE: "任务模板", ACCOUNTS: "账号列表" };
+        const editingForm = /* @__PURE__ */ reactive({
+          group: "默认分组",
+          businessType: "端原生-付费短剧",
+          enableCustomAccountMatchCount: false,
+          accountMatchCount: String(getDefaultAccountMatchCount()),
+          files: { TEMPLATE: "", ACCOUNTS: "" }
+        });
+        const initNewProfile = () => {
+          localSelectedName.value = "";
+          targetName.value = "";
+          editingForm.group = lastSavedGroup.value;
+          editingForm.businessType = "端原生-付费短剧";
+          editingForm.enableCustomAccountMatchCount = false;
+          editingForm.accountMatchCount = String(getDefaultAccountMatchCount());
+          editingForm.files = { TEMPLATE: "", ACCOUNTS: "" };
+        };
+        const createNewGroup = () => {
+          ElMessageBox.prompt("请输入新分组名称", "新建分组", { confirmButtonText: "确定", cancelButtonText: "取消", inputPattern: /\S+/, inputErrorMessage: "不可为空" }).then(({ value }) => {
+            const g = value.trim();
+            if (existingGroups.value.includes(g)) return ElMessage.warning("分组已存在");
+            manualEmptyGroups.value.add(g);
+            ElMessage.success(`分组 [${g}] 已创建`);
+          }).catch(() => {
+          });
+        };
+        const showClearAccountDialog = /* @__PURE__ */ ref(false);
+        const showClearAccountResultDialog = /* @__PURE__ */ ref(false);
+        const clearAccountInput = /* @__PURE__ */ ref("");
+        const clearAccountDialogBodyRef = /* @__PURE__ */ ref(null);
+        const clearAccountResultList = /* @__PURE__ */ ref([]);
+        const clearAccountResultSummary = /* @__PURE__ */ ref({ hitCount: 0, totalDeleted: 0 });
+        const isClearingAccounts = /* @__PURE__ */ ref(false);
+        const clearAccount = () => {
+          clearAccountInput.value = "";
+          showClearAccountDialog.value = true;
+        };
+        const confirmClearAccounts = async () => {
+          const accounts = clearAccountInput.value.split(/\r?\n/).map((s2) => s2.trim()).filter(Boolean);
+          if (!accounts.length) {
+            return ElMessage.warning("请输入至少一个账号");
+          }
+          try {
+            await ElMessageBox.confirm(
+              `即将在全部方案的账号列表中删除 ${accounts.length} 个账号，此操作不可恢复，是否继续？`,
+              "确认清除",
+              { type: "warning", confirmButtonText: "确认", cancelButtonText: "取消" }
+            );
+          } catch {
+            return;
+          }
+          isClearingAccounts.value = true;
+          await nextTick();
+          const loading = ElLoading.service({
+            target: clearAccountDialogBodyRef.value || void 0,
+            text: "正在遍历所有方案并删除账号，请稍候...",
+            lock: true
+          });
+          try {
+            const res = await window.api.batchRemoveAccountsFromProfiles({ accounts });
+            if (!res?.success) throw new Error(res?.msg || "清除失败");
+            const hit = (res.results || []).filter((r) => r.deletedCount > 0);
+            if (!hit.length) {
+              ElMessage.info("所有方案中均未找到目标账号");
+            } else {
+              const getProfileGroup = (name) => props2.allProfiles[name]?.group || "默认分组";
+              hit.sort((a2, b2) => {
+                const ga = getProfileGroup(a2.profileName);
+                const gb = getProfileGroup(b2.profileName);
+                return ga.localeCompare(gb, "zh-CN") || a2.profileName.localeCompare(b2.profileName, "zh-CN");
+              });
+              clearAccountResultList.value = hit.map((r) => ({
+                group: getProfileGroup(r.profileName),
+                profileName: r.profileName,
+                deletedCount: r.deletedCount
+              }));
+              clearAccountResultSummary.value = {
+                hitCount: hit.length,
+                totalDeleted: hit.reduce((sum2, r) => sum2 + r.deletedCount, 0)
+              };
+              localFilesDirty.value = true;
+              showClearAccountDialog.value = false;
+              showClearAccountResultDialog.value = true;
+              return;
+            }
+            showClearAccountDialog.value = false;
+          } catch (e) {
+            ElMessage.error(e.message || "清除失败");
+          } finally {
+            isClearingAccounts.value = false;
+            loading.close();
+          }
+        };
+        const openDeleteGroupDialog = (groupName) => {
+          groupToDelete.value = groupName;
+          deleteGroupOption.value = "keep";
+          showDeleteGroupDialog.value = true;
+        };
+        const isDeletingGroup = /* @__PURE__ */ ref(false);
+        const showDeleteGroupDialog = /* @__PURE__ */ ref(false);
+        const groupToDelete = /* @__PURE__ */ ref("");
+        const deleteGroupOption = /* @__PURE__ */ ref("keep");
+        const confirmDeleteGroup = async () => {
+          const gName = groupToDelete.value;
+          const opt = deleteGroupOption.value;
+          isDeletingGroup.value = true;
+          try {
+            const profiles = JSON.parse(JSON.stringify(props2.allProfiles));
+            let changed = false;
+            if (opt === "keep") {
+              Object.keys(profiles).forEach((n) => {
+                if (profiles[n].group === gName) {
+                  profiles[n].group = "默认分组";
+                  changed = true;
+                }
+              });
+              if (editingForm.group === gName) editingForm.group = "默认分组";
+            } else {
+              const toDel = Object.keys(profiles).filter((n) => profiles[n].group === gName);
+              for (const n of toDel) {
+                await window.api.deleteProfileFolder(n);
+                delete profiles[n];
+                changed = true;
+                if (localSelectedName.value === n) initNewProfile();
+              }
+            }
+            manualEmptyGroups.value.delete(gName);
+            if (changed) emitProfilesUpdate(profiles);
+            showDeleteGroupDialog.value = false;
+            ElMessage.success("分组处理完毕");
+          } catch (e) {
+            ElMessage.error(e.message);
+          } finally {
+            isDeletingGroup.value = false;
+          }
+        };
+        const isBatchMode = /* @__PURE__ */ ref(false);
+        const batchSelected = /* @__PURE__ */ ref(/* @__PURE__ */ new Set());
+        const showBatchMoveDialog = /* @__PURE__ */ ref(false);
+        const batchTargetGroup = /* @__PURE__ */ ref("");
+        const toggleBatchMode = () => {
+          isBatchMode.value = !isBatchMode.value;
+          if (!isBatchMode.value) batchSelected.value = /* @__PURE__ */ new Set();
+        };
+        const toggleSelection = (n) => {
+          const s2 = new Set(batchSelected.value);
+          if (s2.has(n)) s2.delete(n);
+          else s2.add(n);
+          batchSelected.value = s2;
+        };
+        const openBatchMoveDialog = () => {
+          batchTargetGroup.value = "";
+          showBatchMoveDialog.value = true;
+        };
+        const confirmBatchMove = () => {
+          if (!batchTargetGroup.value) return ElMessage.warning("请指定目标");
+          const p2 = JSON.parse(JSON.stringify(props2.allProfiles));
+          batchSelected.value.forEach((n) => {
+            if (p2[n]) p2[n].group = batchTargetGroup.value;
+          });
+          manualEmptyGroups.value.add(batchTargetGroup.value);
+          emitProfilesUpdate(p2);
+          if (batchSelected.value.has(localSelectedName.value)) editingForm.group = batchTargetGroup.value;
+          isBatchMode.value = false;
+          showBatchMoveDialog.value = false;
+        };
+        const handleItemClick = (n) => {
+          if (isBatchMode.value) toggleSelection(n);
+          else selectProfile(n);
+        };
+        const selectProfile = (n) => {
+          if (props2.allProfiles[n]) {
+            localSelectedName.value = n;
+            targetName.value = n;
+            const p2 = props2.allProfiles[n];
+            editingForm.group = p2.group || "默认分组";
+            editingForm.businessType = p2.businessType;
+            const fallbackEnable = p2.accountMatchCount != null;
+            editingForm.enableCustomAccountMatchCount = p2.enableCustomAccountMatchCount == null ? fallbackEnable : p2.enableCustomAccountMatchCount === true;
+            editingForm.accountMatchCount = p2.accountMatchCount == null ? String(getDefaultAccountMatchCount()) : String(p2.accountMatchCount);
+            editingForm.files = { ...p2.files };
+          }
+        };
+        const deleteProfileName = (n) => {
+          ElMessageBox.confirm(`确定删除方案 [${n}] 吗？`, "警告", {
+            type: "warning",
+            confirmButtonText: "确定",
+            cancelButtonText: "取消"
+          }).then(async () => {
+            await window.api.deleteProfileFolder(n);
+            const p2 = { ...props2.allProfiles };
+            delete p2[n];
+            emitProfilesUpdate(p2);
+            if (localSelectedName.value === n) initNewProfile();
+          }).catch(() => {
+          });
+        };
+        let draggingProfileName = null;
+        const handleDragStart = (n, e) => {
+          draggingProfileName = n;
+          e.dataTransfer.effectAllowed = "move";
+          setTimeout(() => {
+            e.target.style.opacity = "0.5";
+          }, 0);
+        };
+        const handleDragOverItem = (e) => {
+          e.dataTransfer.dropEffect = "move";
+          e.currentTarget.classList.add("drag-over-item");
+        };
+        const handleDragLeaveItem = (e) => e.currentTarget.classList.remove("drag-over-item");
+        const handleDropItem = (targetN, e) => {
+          e.currentTarget.classList.remove("drag-over-item");
+          if (!draggingProfileName || draggingProfileName === targetN) return;
+          const p2 = JSON.parse(JSON.stringify(props2.allProfiles));
+          p2[draggingProfileName].group = p2[targetN].group || "默认分组";
+          const keys2 = Object.keys(p2);
+          const fromIdx = keys2.indexOf(draggingProfileName);
+          keys2.splice(fromIdx, 1);
+          const toIdx = keys2.indexOf(targetN);
+          keys2.splice(toIdx, 0, draggingProfileName);
+          const newP = {};
+          keys2.forEach((k) => newP[k] = p2[k]);
+          emitProfilesUpdate(newP, keys2);
+          draggingProfileName = null;
+        };
+        const handleDragOverGroup = (e) => {
+          e.dataTransfer.dropEffect = "move";
+          e.currentTarget.classList.add("drag-over-group");
+        };
+        const handleDragLeaveGroup = (e) => e.currentTarget.classList.remove("drag-over-group");
+        const handleGroupDrop = (gName, e) => {
+          e.currentTarget.classList.remove("drag-over-group");
+          if (!draggingProfileName) return;
+          const p2 = JSON.parse(JSON.stringify(props2.allProfiles));
+          p2[draggingProfileName].group = gName;
+          emitProfilesUpdate(p2);
+          if (collapsedGroups.value.has(gName)) {
+            const s2 = new Set(collapsedGroups.value);
+            s2.delete(gName);
+            collapsedGroups.value = s2;
+          }
+          draggingProfileName = null;
+        };
+        const toggleGroup = (g) => {
+          const s2 = new Set(collapsedGroups.value);
+          if (s2.has(g)) s2.delete(g);
+          else s2.add(g);
+          collapsedGroups.value = s2;
+        };
+        const getFileName = (path) => path ? path.split(/[\\/]/).pop() : "";
+        const isExcelPath = (pathOrName) => {
+          const name = getFileName(pathOrName || "");
+          const lower = name.toLowerCase();
+          return lower.endsWith(".xlsx") || lower.endsWith(".xls");
+        };
+        const openFolder = (n) => window.api.openProfileFolder(n);
+        const triggerFileSelect = async (k) => {
+          const s2 = await window.api.openExcelFile();
+          if (!s2) return;
+          if (!isExcelPath(s2)) {
+            ElMessage.warning("仅支持 Excel 文件（.xlsx / .xls）");
+            return;
+          }
+          editingForm.files[k] = s2;
+        };
+        const onDropZoneDragOver = (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        };
+        const handleFileDrop = (e, k) => {
+          const f2 = e.dataTransfer?.files[0];
+          if (!f2) return;
+          if (!isExcelPath(f2.name)) {
+            ElMessage.warning("仅支持 Excel 文件（.xlsx / .xls）");
+            return;
+          }
+          editingForm.files[k] = window.api?.getFilePath ? window.api.getFilePath(f2) : f2.path;
+        };
+        const handleMainSave = async () => {
+          const nName = targetName.value.trim();
+          if (!nName) return ElMessage.warning("请输入名称");
+          isSaving.value = true;
+          const loading = ElLoading.service({ target: ".detail-card", text: "保存中..." });
+          try {
+            const p2 = JSON.parse(JSON.stringify(props2.allProfiles));
+            const oldName = localSelectedName.value;
+            const creatingNew = !oldName || !Object.prototype.hasOwnProperty.call(p2, oldName);
+            if ((creatingNew || oldName !== nName) && Object.prototype.hasOwnProperty.call(p2, nName)) {
+              throw new Error(`方案名 [${nName}] 已存在，请更换名称`);
+            }
+            if (!creatingNew && oldName !== nName) {
+              const renameRes = await window.api.renameProfileFolder({ oldName, newName: nName });
+              if (!renameRes?.success) {
+                throw new Error(renameRes?.msg || "重命名方案目录失败");
+              }
+            }
+            const finalFiles = { ...editingForm.files };
+            for (const key in finalFiles) {
+              const src = finalFiles[key];
+              if (src && (src.includes(":") || src.includes("/"))) {
+                if (!isExcelPath(src)) {
+                  throw new Error("仅支持 Excel 文件（.xlsx / .xls），请更换后重试");
+                }
+                const res = await window.api.importFile({ profileName: nName, sourcePath: src });
+                if (res.success) finalFiles[key] = res.fileName;
+                else throw new Error(res.msg);
+              }
+            }
+            let normalizedMatchCount = null;
+            if (editingForm.enableCustomAccountMatchCount) {
+              if (editingForm.accountMatchCount === "" || editingForm.accountMatchCount == null) {
+                throw new Error("已启用方案独立账户数时，请填写 x（每次配置的账户数量）");
+              }
+              const parsedCount = parseInt(editingForm.accountMatchCount, 10);
+              if (!Number.isFinite(parsedCount) || parsedCount < 1) {
+                throw new Error("账号匹配数必须是大于等于 1 的整数，或留空使用系统默认值");
+              }
+              normalizedMatchCount = parsedCount;
+            }
+            const newProfileData = {
+              ...editingForm,
+              enableCustomAccountMatchCount: editingForm.enableCustomAccountMatchCount === true,
+              accountMatchCount: normalizedMatchCount,
+              files: finalFiles
+            };
+            const baseOrder = Array.isArray(props2.profileOrder) && props2.profileOrder.length > 0 ? props2.profileOrder.filter((name) => p2[name]) : Object.keys(p2);
+            if (!creatingNew && oldName !== nName) {
+              const keys2 = [...baseOrder];
+              const oldIndex = keys2.indexOf(oldName);
+              const newP = {};
+              const newOrder = [];
+              keys2.forEach((k, idx) => {
+                if (idx === oldIndex) {
+                  newP[nName] = newProfileData;
+                  newOrder.push(nName);
+                } else if (k !== oldName) {
+                  newP[k] = p2[k];
+                  newOrder.push(k);
+                }
+              });
+              emitProfilesUpdate(newP, newOrder);
+            } else {
+              const keys2 = [...baseOrder];
+              const newP = {};
+              const newOrder = [];
+              keys2.forEach((k) => {
+                if (k !== nName) {
+                  newP[k] = p2[k];
+                  newOrder.push(k);
+                }
+              });
+              newP[nName] = newProfileData;
+              newOrder.push(nName);
+              emitProfilesUpdate(newP, newOrder);
+            }
+            lastSavedGroup.value = editingForm.group;
+            globalLastSavedGroup = editingForm.group;
+            localSelectedName.value = nName;
+            editingForm.files = finalFiles;
+            ElMessage.success("保存成功");
+          } catch (e) {
+            ElMessage.error(e.message);
+          } finally {
+            isSaving.value = false;
+            loading.close();
+          }
+        };
+        const openExternal = (p2) => {
+          if (!p2) return;
+          if (p2.includes(":") || p2.includes("/")) window.api.openExternal(p2);
+          else window.api.openExternal({ profileName: localSelectedName.value, fileName: p2 });
         };
         return (_ctx, _cache) => {
           const _component_el_input = resolveComponent("el-input");
           const _component_el_button = resolveComponent("el-button");
           const _component_el_icon = resolveComponent("el-icon");
+          const _component_el_checkbox = resolveComponent("el-checkbox");
+          const _component_el_collapse_transition = resolveComponent("el-collapse-transition");
           const _component_el_button_group = resolveComponent("el-button-group");
           const _component_el_tag = resolveComponent("el-tag");
           const _component_el_option = resolveComponent("el-option");
           const _component_el_select = resolveComponent("el-select");
           const _component_el_divider = resolveComponent("el-divider");
           const _component_el_card = resolveComponent("el-card");
-          return openBlock(), createElementBlock("div", _hoisted_1$2, [
-            createBaseVNode("div", _hoisted_2$2, [
-              createBaseVNode("div", _hoisted_3$2, [
-                createVNode(_component_el_input, {
-                  modelValue: searchKeyword.value,
-                  "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => searchKeyword.value = $event),
-                  placeholder: "搜索方案...",
-                  "prefix-icon": "Search",
-                  clearable: "",
-                  size: "default"
-                }, null, 8, ["modelValue"]),
+          const _component_el_dialog = resolveComponent("el-dialog");
+          const _component_el_radio = resolveComponent("el-radio");
+          const _component_el_radio_group = resolveComponent("el-radio-group");
+          const _component_el_scrollbar = resolveComponent("el-scrollbar");
+          return openBlock(), createElementBlock("div", _hoisted_1$3, [
+            createBaseVNode("div", _hoisted_2$3, [
+              createBaseVNode("div", _hoisted_3$3, [
+                createBaseVNode("div", _hoisted_4$3, [
+                  createVNode(_component_el_input, {
+                    modelValue: searchKeyword.value,
+                    "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => searchKeyword.value = $event),
+                    placeholder: "搜索方案...",
+                    "prefix-icon": "Search",
+                    clearable: "",
+                    size: "default",
+                    style: { "flex": "1" }
+                  }, null, 8, ["modelValue"]),
+                  createVNode(_component_el_button, {
+                    type: "success",
+                    icon: unref(chrome_filled_default),
+                    circle: "",
+                    size: "small",
+                    style: { "margin-left": "8px", "flex-shrink": "0" },
+                    title: "清除账号",
+                    onClick: clearAccount
+                  }, null, 8, ["icon"]),
+                  createVNode(_component_el_button, {
+                    type: "warning",
+                    icon: unref(folder_add_default),
+                    circle: "",
+                    size: "small",
+                    style: { "margin-left": "8px", "flex-shrink": "0" },
+                    title: "新建空白分组",
+                    onClick: createNewGroup
+                  }, null, 8, ["icon"]),
+                  createVNode(_component_el_button, {
+                    type: isBatchMode.value ? "danger" : "primary",
+                    icon: unref(operation_default),
+                    circle: "",
+                    size: "small",
+                    style: { "margin-left": "8px", "flex-shrink": "0" },
+                    title: isBatchMode.value ? "退出批量管理" : "批量管理分组",
+                    onClick: toggleBatchMode
+                  }, null, 8, ["type", "icon", "title"])
+                ])
+              ]),
+              createBaseVNode("div", _hoisted_5$3, [
+                (openBlock(true), createElementBlock(Fragment, null, renderList(groupedProfiles.value, ({ groupProfiles, groupName }) => {
+                  return openBlock(), createElementBlock("div", {
+                    key: groupName,
+                    class: "group-section"
+                  }, [
+                    createBaseVNode("div", {
+                      class: "group-title",
+                      onClick: ($event) => toggleGroup(groupName),
+                      onDragover: withModifiers(handleDragOverGroup, ["prevent", "stop"]),
+                      onDragleave: withModifiers(handleDragLeaveGroup, ["prevent", "stop"]),
+                      onDrop: withModifiers(($event) => handleGroupDrop(groupName, $event), ["prevent", "stop"])
+                    }, [
+                      createVNode(_component_el_icon, {
+                        class: normalizeClass(["folder-arrow", { "is-collapsed": collapsedGroups.value.has(groupName) }])
+                      }, {
+                        default: withCtx(() => [
+                          createVNode(unref(caret_bottom_default))
+                        ]),
+                        _: 1
+                      }, 8, ["class"]),
+                      createVNode(_component_el_icon, { style: { "margin-right": "6px" } }, {
+                        default: withCtx(() => [
+                          createVNode(unref(folder_default))
+                        ]),
+                        _: 1
+                      }),
+                      createBaseVNode("span", _hoisted_7$3, toDisplayString(groupName) + " (" + toDisplayString(groupProfiles.length) + ")", 1),
+                      groupName !== "默认分组" ? (openBlock(), createElementBlock("div", {
+                        key: 0,
+                        class: "group-action",
+                        onClick: withModifiers(($event) => openDeleteGroupDialog(groupName), ["stop"]),
+                        title: "删除此分组"
+                      }, [
+                        createVNode(_component_el_icon, null, {
+                          default: withCtx(() => [
+                            createVNode(unref(delete_default))
+                          ]),
+                          _: 1
+                        })
+                      ], 8, _hoisted_8$3)) : createCommentVNode("", true)
+                    ], 40, _hoisted_6$3),
+                    createVNode(_component_el_collapse_transition, null, {
+                      default: withCtx(() => [
+                        withDirectives(createBaseVNode("div", null, [
+                          (openBlock(true), createElementBlock(Fragment, null, renderList(groupProfiles, (name) => {
+                            return openBlock(), createElementBlock("div", {
+                              key: name,
+                              class: normalizeClass(["list-item", { active: localSelectedName.value === name && !isBatchMode.value }]),
+                              draggable: !searchKeyword.value && !isBatchMode.value,
+                              onDragstart: ($event) => handleDragStart(name, $event),
+                              onDragover: withModifiers(handleDragOverItem, ["prevent", "stop"]),
+                              onDragleave: withModifiers(handleDragLeaveItem, ["prevent", "stop"]),
+                              onDrop: withModifiers(($event) => handleDropItem(name, $event), ["prevent", "stop"]),
+                              onClick: ($event) => handleItemClick(name)
+                            }, [
+                              isBatchMode.value ? (openBlock(), createBlock(_component_el_checkbox, {
+                                key: 0,
+                                "model-value": batchSelected.value.has(name),
+                                onChange: ($event) => toggleSelection(name),
+                                onClick: _cache[1] || (_cache[1] = withModifiers(() => {
+                                }, ["stop"])),
+                                style: { "margin-right": "8px" }
+                              }, null, 8, ["model-value", "onChange"])) : (openBlock(), createElementBlock("div", _hoisted_10$3, [
+                                createVNode(_component_el_icon, null, {
+                                  default: withCtx(() => [
+                                    createVNode(unref(document_default))
+                                  ]),
+                                  _: 1
+                                })
+                              ])),
+                              createBaseVNode("div", _hoisted_11$3, [
+                                createBaseVNode("div", {
+                                  class: "item-title",
+                                  title: name
+                                }, toDisplayString(name), 9, _hoisted_12$3),
+                                createBaseVNode("div", _hoisted_13$3, toDisplayString(__props.allProfiles[name]?.businessType || "未知类型"), 1)
+                              ]),
+                              !isBatchMode.value ? (openBlock(), createElementBlock("div", {
+                                key: 2,
+                                class: "item-action",
+                                onClick: withModifiers(($event) => deleteProfileName(name), ["stop"])
+                              }, [
+                                createVNode(_component_el_icon, null, {
+                                  default: withCtx(() => [
+                                    createVNode(unref(delete_default))
+                                  ]),
+                                  _: 1
+                                })
+                              ], 8, _hoisted_14$2)) : createCommentVNode("", true)
+                            ], 42, _hoisted_9$3);
+                          }), 128))
+                        ], 512), [
+                          [vShow, !collapsedGroups.value.has(groupName)]
+                        ])
+                      ]),
+                      _: 2
+                    }, 1024)
+                  ]);
+                }), 128)),
+                groupedProfiles.value.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_15$2, [
+                  searchKeyword.value ? (openBlock(), createElementBlock("span", _hoisted_16$2, "无匹配结果")) : (openBlock(), createElementBlock("span", _hoisted_17$2, "暂无方案，请新建"))
+                ])) : createCommentVNode("", true)
+              ]),
+              isBatchMode.value ? (openBlock(), createElementBlock("div", _hoisted_18$2, [
+                createBaseVNode("span", _hoisted_19$2, "已选: " + toDisplayString(batchSelected.value.size) + " 项", 1),
+                createBaseVNode("div", _hoisted_20$2, [
+                  createVNode(_component_el_button, {
+                    size: "small",
+                    onClick: toggleBatchMode
+                  }, {
+                    default: withCtx(() => [..._cache[20] || (_cache[20] = [
+                      createTextVNode("取消", -1)
+                    ])]),
+                    _: 1
+                  }),
+                  createVNode(_component_el_button, {
+                    size: "small",
+                    type: "primary",
+                    disabled: batchSelected.value.size === 0,
+                    onClick: openBatchMoveDialog
+                  }, {
+                    default: withCtx(() => [..._cache[21] || (_cache[21] = [
+                      createTextVNode(" 更改分组 ", -1)
+                    ])]),
+                    _: 1
+                  }, 8, ["disabled"])
+                ])
+              ])) : (openBlock(), createElementBlock("div", _hoisted_21$2, [
+                createVNode(_component_el_button_group, { style: { "width": "100%", "display": "flex" } }, {
+                  default: withCtx(() => [
+                    createVNode(_component_el_button, {
+                      style: { "flex": "1", "display": "flex", "justify-content": "center", "align-items": "center" },
+                      size: "small",
+                      type: needsCloudBackup.value ? "warning" : "default",
+                      plain: !needsCloudBackup.value,
+                      class: normalizeClass({ "needs-backup-pulse": needsCloudBackup.value && !isCloudUploading.value }),
+                      disabled: isCloudUploading.value || isCloudDownloading.value,
+                      onClick: handleCloudUpload
+                    }, {
+                      default: withCtx(() => [
+                        isCloudUploading.value ? (openBlock(), createBlock(_component_el_icon, {
+                          key: 0,
+                          class: "is-loading",
+                          style: { "margin-right": "4px" }
+                        }, {
+                          default: withCtx(() => [
+                            createVNode(unref(loading_default))
+                          ]),
+                          _: 1
+                        })) : (openBlock(), createElementBlock("span", _hoisted_22$2, "☁️")),
+                        isCloudUploading.value ? (openBlock(), createElementBlock("span", _hoisted_23$1, "备份中...")) : (openBlock(), createElementBlock("span", _hoisted_24$1, toDisplayString(needsCloudBackup.value ? "点我备份" : "云端备份"), 1))
+                      ]),
+                      _: 1
+                    }, 8, ["type", "plain", "class", "disabled"]),
+                    createVNode(_component_el_button, {
+                      style: { "flex": "1", "display": "flex", "justify-content": "center", "align-items": "center" },
+                      size: "small",
+                      plain: "",
+                      disabled: isCloudUploading.value || isCloudDownloading.value,
+                      onClick: handleCloudDownload
+                    }, {
+                      default: withCtx(() => [
+                        isCloudDownloading.value ? (openBlock(), createBlock(_component_el_icon, {
+                          key: 0,
+                          class: "is-loading",
+                          style: { "margin-right": "4px" }
+                        }, {
+                          default: withCtx(() => [
+                            createVNode(unref(loading_default))
+                          ]),
+                          _: 1
+                        })) : (openBlock(), createElementBlock("span", _hoisted_25$1, "📥")),
+                        createBaseVNode("span", null, toDisplayString(isCloudDownloading.value ? "同步中..." : "恢复"), 1)
+                      ]),
+                      _: 1
+                    }, 8, ["disabled"])
+                  ]),
+                  _: 1
+                })
+              ]))
+            ]),
+            createBaseVNode("div", _hoisted_26$1, [
+              createBaseVNode("div", _hoisted_27$1, [
                 createVNode(_component_el_button, {
                   type: "success",
                   icon: unref(plus_default),
                   circle: "",
                   size: "small",
-                  style: { "margin-left": "8px" },
+                  style: { "margin-left": "8px", "flex-shrink": "0" },
                   title: "新建方案",
                   onClick: initNewProfile
                 }, null, 8, ["icon"])
               ]),
-              createBaseVNode("div", _hoisted_4$2, [
-                (openBlock(true), createElementBlock(Fragment, null, renderList(filteredProfileNames.value, (name) => {
-                  return openBlock(), createElementBlock("div", {
-                    key: name,
-                    class: normalizeClass(["list-item", { active: localSelectedName.value === name }]),
-                    onClick: ($event) => selectProfile(name)
-                  }, [
-                    createBaseVNode("div", _hoisted_6$2, [
-                      createVNode(_component_el_icon, null, {
-                        default: withCtx(() => [
-                          createVNode(unref(document_default))
-                        ]),
-                        _: 1
-                      })
-                    ]),
-                    createBaseVNode("div", _hoisted_7$2, [
-                      createBaseVNode("div", _hoisted_8$2, toDisplayString(name), 1),
-                      createBaseVNode("div", _hoisted_9$2, toDisplayString(__props.allProfiles[name]?.businessType || "未知类型"), 1)
-                    ]),
-                    createBaseVNode("div", {
-                      class: "item-action",
-                      onClick: withModifiers(($event) => deleteProfileName(name), ["stop"])
-                    }, [
-                      createVNode(_component_el_icon, null, {
-                        default: withCtx(() => [
-                          createVNode(unref(delete_default))
-                        ]),
-                        _: 1
-                      })
-                    ], 8, _hoisted_10$2)
-                  ], 10, _hoisted_5$2);
-                }), 128)),
-                filteredProfileNames.value.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_11$2, [
-                  searchKeyword.value ? (openBlock(), createElementBlock("span", _hoisted_12$1, "无匹配结果")) : (openBlock(), createElementBlock("span", _hoisted_13$1, "暂无方案，请新建"))
-                ])) : createCommentVNode("", true)
-              ]),
-              createBaseVNode("div", _hoisted_14$1, [
-                createVNode(_component_el_button_group, { style: { "width": "100%", "display": "flex" } }, {
-                  default: withCtx(() => [
-                    createVNode(_component_el_button, {
-                      style: { "flex": "1" },
-                      size: "small",
-                      plain: "",
-                      loading: isCloudUploading.value,
-                      disabled: isCloudDownloading.value,
-                      onClick: handleCloudUpload
-                    }, {
-                      default: withCtx(() => [
-                        createTextVNode(toDisplayString(isCloudUploading.value ? "备份中" : "☁️ 备份"), 1)
-                      ]),
-                      _: 1
-                    }, 8, ["loading", "disabled"]),
-                    createVNode(_component_el_button, {
-                      style: { "flex": "1" },
-                      size: "small",
-                      plain: "",
-                      loading: isCloudDownloading.value,
-                      disabled: isCloudUploading.value,
-                      onClick: handleCloudDownload
-                    }, {
-                      default: withCtx(() => [
-                        createTextVNode(toDisplayString(isCloudDownloading.value ? "同步中" : "📥 恢复"), 1)
-                      ]),
-                      _: 1
-                    }, 8, ["loading", "disabled"])
-                  ]),
-                  _: 1
-                })
-              ])
-            ]),
-            createBaseVNode("div", _hoisted_15$1, [
               createVNode(_component_el_card, {
                 class: "detail-card",
                 shadow: "never"
               }, {
                 header: withCtx(() => [
-                  createBaseVNode("div", _hoisted_16$1, [
-                    createBaseVNode("div", _hoisted_17$1, [
+                  createBaseVNode("div", _hoisted_28$1, [
+                    createBaseVNode("div", _hoisted_29$1, [
                       createVNode(_component_el_tag, {
                         type: isNewMode.value ? "success" : "primary",
                         effect: "dark",
@@ -83393,17 +84997,17 @@ var require_index_001 = __commonJS({
                         ]),
                         _: 1
                       }, 8, ["type"]),
-                      createBaseVNode("span", _hoisted_18$1, toDisplayString(isNewMode.value ? "新建方案" : targetName.value), 1)
+                      createBaseVNode("span", _hoisted_30$1, toDisplayString(isNewMode.value ? "新建方案" : targetName.value), 1)
                     ]),
-                    createBaseVNode("div", _hoisted_19$1, [
+                    createBaseVNode("div", _hoisted_31$1, [
                       localSelectedName.value ? (openBlock(), createBlock(_component_el_button, {
                         key: 0,
                         type: "info",
                         link: "",
                         icon: unref(folder_opened_default),
-                        onClick: _cache[1] || (_cache[1] = ($event) => openFolder(localSelectedName.value))
+                        onClick: _cache[2] || (_cache[2] = ($event) => openFolder(localSelectedName.value))
                       }, {
-                        default: withCtx(() => [..._cache[5] || (_cache[5] = [
+                        default: withCtx(() => [..._cache[22] || (_cache[22] = [
                           createTextVNode(" 打开目录 ", -1)
                         ])]),
                         _: 1
@@ -83412,23 +85016,48 @@ var require_index_001 = __commonJS({
                   ])
                 ]),
                 default: withCtx(() => [
-                  createBaseVNode("div", _hoisted_20$1, [
-                    createBaseVNode("div", _hoisted_21$1, [
-                      createBaseVNode("div", _hoisted_22$1, [
-                        _cache[6] || (_cache[6] = createBaseVNode("span", { class: "label-text" }, "方案名称：", -1)),
+                  createBaseVNode("div", _hoisted_32$1, [
+                    createBaseVNode("div", _hoisted_33$1, [
+                      createBaseVNode("div", _hoisted_34$1, [
+                        _cache[23] || (_cache[23] = createBaseVNode("span", { class: "label-text" }, "方案名称：", -1)),
                         createVNode(_component_el_input, {
                           modelValue: targetName.value,
-                          "onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => targetName.value = $event),
+                          "onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => targetName.value = $event),
                           placeholder: "方案名称 (唯一标识)",
                           clearable: ""
                         }, null, 8, ["modelValue"])
                       ]),
-                      createBaseVNode("div", _hoisted_23, [
-                        _cache[7] || (_cache[7] = createBaseVNode("span", { class: "label-text" }, "业务类型：", -1)),
+                      createBaseVNode("div", _hoisted_35$1, [
+                        _cache[24] || (_cache[24] = createBaseVNode("span", { class: "label-text" }, "所属分组 (可直接手填新分组)：", -1)),
+                        createVNode(_component_el_select, {
+                          modelValue: editingForm.group,
+                          "onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => editingForm.group = $event),
+                          filterable: "",
+                          "allow-create": "",
+                          "default-first-option": "",
+                          placeholder: "输入或选择分组",
+                          style: { "width": "100%" }
+                        }, {
+                          default: withCtx(() => [
+                            (openBlock(true), createElementBlock(Fragment, null, renderList(existingGroups.value, (g) => {
+                              return openBlock(), createBlock(_component_el_option, {
+                                key: g,
+                                label: g,
+                                value: g
+                              }, null, 8, ["label", "value"]);
+                            }), 128))
+                          ]),
+                          _: 1
+                        }, 8, ["modelValue"])
+                      ])
+                    ]),
+                    createBaseVNode("div", _hoisted_36$1, [
+                      createBaseVNode("div", _hoisted_37$1, [
+                        _cache[25] || (_cache[25] = createBaseVNode("span", { class: "label-text" }, "业务类型：", -1)),
                         createVNode(_component_el_select, {
                           modelValue: editingForm.businessType,
-                          "onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => editingForm.businessType = $event),
-                          style: { "width": "100%" }
+                          "onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => editingForm.businessType = $event),
+                          style: { "width": "100%", "max-width": "50%" }
                         }, {
                           default: withCtx(() => [
                             createVNode(_component_el_option, {
@@ -83452,8 +85081,43 @@ var require_index_001 = __commonJS({
                         }, 8, ["modelValue"])
                       ])
                     ]),
+                    createBaseVNode("div", _hoisted_38$1, [
+                      createBaseVNode("div", _hoisted_39, [
+                        createBaseVNode("div", _hoisted_40, [
+                          createVNode(_component_el_checkbox, {
+                            modelValue: editingForm.enableCustomAccountMatchCount,
+                            "onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => editingForm.enableCustomAccountMatchCount = $event)
+                          }, {
+                            default: withCtx(() => [..._cache[26] || (_cache[26] = [
+                              createTextVNode(" 启用方案独立账户数 ", -1)
+                            ])]),
+                            _: 1
+                          }, 8, ["modelValue"]),
+                          createBaseVNode("div", _hoisted_41, [
+                            _cache[27] || (_cache[27] = createBaseVNode("span", {
+                              class: "label-text",
+                              style: { "margin": "0", "font-weight": "normal" }
+                            }, "每次配置", -1)),
+                            createVNode(_component_el_input, {
+                              modelValue: editingForm.accountMatchCount,
+                              "onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => editingForm.accountMatchCount = $event),
+                              type: "number",
+                              min: "1",
+                              clearable: "",
+                              disabled: !editingForm.enableCustomAccountMatchCount,
+                              placeholder: "x",
+                              style: { "width": "88px" }
+                            }, null, 8, ["modelValue", "disabled"]),
+                            _cache[28] || (_cache[28] = createBaseVNode("span", {
+                              class: "label-text",
+                              style: { "margin": "0", "font-weight": "normal" }
+                            }, "个账户", -1))
+                          ])
+                        ])
+                      ])
+                    ]),
                     createVNode(_component_el_divider, { "content-position": "left" }, {
-                      default: withCtx(() => [..._cache[8] || (_cache[8] = [
+                      default: withCtx(() => [..._cache[29] || (_cache[29] = [
                         createTextVNode("文件配置", -1)
                       ])]),
                       _: 1
@@ -83463,7 +85127,7 @@ var require_index_001 = __commonJS({
                         key,
                         class: "file-drop-row"
                       }, [
-                        createBaseVNode("div", _hoisted_24, [
+                        createBaseVNode("div", _hoisted_42, [
                           createVNode(_component_el_icon, null, {
                             default: withCtx(() => [
                               createVNode(unref(document_default))
@@ -83471,31 +85135,31 @@ var require_index_001 = __commonJS({
                             _: 1
                           }),
                           createTextVNode(" " + toDisplayString(labelMap[key] || key) + " ", 1),
-                          !path ? (openBlock(), createElementBlock("span", _hoisted_25, "未配置")) : (openBlock(), createElementBlock("span", _hoisted_26, "已暂存"))
+                          !path ? (openBlock(), createElementBlock("span", _hoisted_43, "未配置")) : (openBlock(), createElementBlock("span", _hoisted_44, "已暂存"))
                         ]),
                         createBaseVNode("div", {
                           class: normalizeClass(["drop-zone", { "has-file": path }]),
                           onClick: ($event) => triggerFileSelect(key),
-                          onDragover: withModifiers(onDragOver, ["prevent", "stop"]),
-                          onDragenter: withModifiers(onDragOver, ["prevent", "stop"]),
-                          onDrop: withModifiers(($event) => handleDrop($event, key), ["prevent", "stop"])
+                          onDragover: withModifiers(onDropZoneDragOver, ["prevent", "stop"]),
+                          onDragenter: withModifiers(onDropZoneDragOver, ["prevent", "stop"]),
+                          onDrop: withModifiers(($event) => handleFileDrop($event, key), ["prevent", "stop"])
                         }, [
                           path ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
-                            createBaseVNode("div", _hoisted_28, [
-                              createBaseVNode("div", _hoisted_29, [
+                            createBaseVNode("div", _hoisted_46, [
+                              createBaseVNode("div", _hoisted_47, [
                                 createVNode(_component_el_icon, { class: "file-icon" }, {
                                   default: withCtx(() => [
                                     createVNode(unref(document_checked_default))
                                   ]),
                                   _: 1
                                 }),
-                                createBaseVNode("span", _hoisted_30, toDisplayString(getFileName(path)), 1)
+                                createBaseVNode("span", _hoisted_48, toDisplayString(getFileName(path)), 1)
                               ]),
-                              createBaseVNode("div", _hoisted_31, toDisplayString(path), 1)
+                              createBaseVNode("div", _hoisted_49, toDisplayString(path), 1)
                             ]),
                             createBaseVNode("div", {
                               class: "file-actions",
-                              onClick: _cache[4] || (_cache[4] = withModifiers(() => {
+                              onClick: _cache[8] || (_cache[8] = withModifiers(() => {
                               }, ["stop"]))
                             }, [
                               createVNode(_component_el_button, {
@@ -83504,7 +85168,7 @@ var require_index_001 = __commonJS({
                                 link: "",
                                 onClick: ($event) => triggerFileSelect(key)
                               }, {
-                                default: withCtx(() => [..._cache[9] || (_cache[9] = [
+                                default: withCtx(() => [..._cache[30] || (_cache[30] = [
                                   createTextVNode("更换", -1)
                                 ])]),
                                 _: 1
@@ -83516,7 +85180,7 @@ var require_index_001 = __commonJS({
                                 link: "",
                                 onClick: ($event) => openExternal(path)
                               }, {
-                                default: withCtx(() => [..._cache[10] || (_cache[10] = [
+                                default: withCtx(() => [..._cache[31] || (_cache[31] = [
                                   createTextVNode("打开", -1)
                                 ])]),
                                 _: 1
@@ -83528,25 +85192,25 @@ var require_index_001 = __commonJS({
                                 link: "",
                                 onClick: ($event) => editingForm.files[key] = ""
                               }, {
-                                default: withCtx(() => [..._cache[11] || (_cache[11] = [
+                                default: withCtx(() => [..._cache[32] || (_cache[32] = [
                                   createTextVNode("清除", -1)
                                 ])]),
                                 _: 1
                               }, 8, ["onClick"])
                             ])
-                          ], 64)) : (openBlock(), createElementBlock("div", _hoisted_32, [
+                          ], 64)) : (openBlock(), createElementBlock("div", _hoisted_50, [
                             createVNode(_component_el_icon, { class: "upload-icon" }, {
                               default: withCtx(() => [
                                 createVNode(unref(upload_filled_default))
                               ]),
                               _: 1
                             }),
-                            _cache[12] || (_cache[12] = createBaseVNode("div", { class: "text" }, "点击或拖拽文件", -1))
+                            _cache[33] || (_cache[33] = createBaseVNode("div", { class: "text" }, "仅支持 Excel（.xlsx / .xls），点击或拖拽上传", -1))
                           ]))
-                        ], 42, _hoisted_27)
+                        ], 42, _hoisted_45)
                       ]);
                     }), 128)),
-                    createBaseVNode("div", _hoisted_33, [
+                    createBaseVNode("div", _hoisted_51, [
                       createVNode(_component_el_button, {
                         type: "primary",
                         size: "large",
@@ -83564,35 +85228,260 @@ var require_index_001 = __commonJS({
                 ]),
                 _: 1
               })
-            ])
+            ]),
+            createVNode(_component_el_dialog, {
+              modelValue: showBatchMoveDialog.value,
+              "onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => showBatchMoveDialog.value = $event),
+              title: "批量转移方案",
+              width: "400px",
+              "destroy-on-close": ""
+            }, {
+              footer: withCtx(() => [
+                createBaseVNode("span", _hoisted_53, [
+                  createVNode(_component_el_button, {
+                    onClick: _cache[10] || (_cache[10] = ($event) => showBatchMoveDialog.value = false)
+                  }, {
+                    default: withCtx(() => [..._cache[36] || (_cache[36] = [
+                      createTextVNode("取消", -1)
+                    ])]),
+                    _: 1
+                  }),
+                  createVNode(_component_el_button, {
+                    type: "primary",
+                    onClick: confirmBatchMove
+                  }, {
+                    default: withCtx(() => [..._cache[37] || (_cache[37] = [
+                      createTextVNode(" 确认转移 ", -1)
+                    ])]),
+                    _: 1
+                  })
+                ])
+              ]),
+              default: withCtx(() => [
+                createBaseVNode("div", _hoisted_52, [
+                  _cache[34] || (_cache[34] = createTextVNode(" 已选择 ", -1)),
+                  createBaseVNode("b", null, toDisplayString(batchSelected.value.size), 1),
+                  _cache[35] || (_cache[35] = createTextVNode(" 个方案，请指定目标分组： ", -1))
+                ]),
+                createVNode(_component_el_select, {
+                  modelValue: batchTargetGroup.value,
+                  "onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => batchTargetGroup.value = $event),
+                  filterable: "",
+                  "allow-create": "",
+                  "default-first-option": "",
+                  placeholder: "选择已有分组或输入新分组名称",
+                  style: { "width": "100%" }
+                }, {
+                  default: withCtx(() => [
+                    (openBlock(true), createElementBlock(Fragment, null, renderList(existingGroups.value, (g) => {
+                      return openBlock(), createBlock(_component_el_option, {
+                        key: g,
+                        label: g,
+                        value: g
+                      }, null, 8, ["label", "value"]);
+                    }), 128))
+                  ]),
+                  _: 1
+                }, 8, ["modelValue"])
+              ]),
+              _: 1
+            }, 8, ["modelValue"]),
+            createVNode(_component_el_dialog, {
+              modelValue: showDeleteGroupDialog.value,
+              "onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => showDeleteGroupDialog.value = $event),
+              title: "删除分组高能预警",
+              width: "450px",
+              "destroy-on-close": ""
+            }, {
+              footer: withCtx(() => [
+                createBaseVNode("span", _hoisted_56, [
+                  createVNode(_component_el_button, {
+                    onClick: _cache[13] || (_cache[13] = ($event) => showDeleteGroupDialog.value = false)
+                  }, {
+                    default: withCtx(() => [..._cache[42] || (_cache[42] = [
+                      createTextVNode("取消", -1)
+                    ])]),
+                    _: 1
+                  }),
+                  createVNode(_component_el_button, {
+                    type: deleteGroupOption.value === "delete_all" ? "danger" : "primary",
+                    loading: isDeletingGroup.value,
+                    onClick: confirmDeleteGroup
+                  }, {
+                    default: withCtx(() => [..._cache[43] || (_cache[43] = [
+                      createTextVNode(" 确认执行 ", -1)
+                    ])]),
+                    _: 1
+                  }, 8, ["type", "loading"])
+                ])
+              ]),
+              default: withCtx(() => [
+                createBaseVNode("div", _hoisted_54, [
+                  _cache[38] || (_cache[38] = createTextVNode(" 您正在尝试删除分组 ", -1)),
+                  createBaseVNode("b", _hoisted_55, "[" + toDisplayString(groupToDelete.value) + "]", 1),
+                  _cache[39] || (_cache[39] = createTextVNode("，请选择对该组内方案的处理方式： ", -1))
+                ]),
+                createVNode(_component_el_radio_group, {
+                  modelValue: deleteGroupOption.value,
+                  "onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => deleteGroupOption.value = $event),
+                  class: "delete-group-radio"
+                }, {
+                  default: withCtx(() => [
+                    createVNode(_component_el_radio, {
+                      value: "keep",
+                      class: "radio-option"
+                    }, {
+                      default: withCtx(() => [..._cache[40] || (_cache[40] = [
+                        createBaseVNode("div", { class: "radio-title" }, "仅删除分组标签", -1),
+                        createBaseVNode("div", { class: "radio-desc" }, "该分组将被移除，组内的方案将被安全地移至【默认分组】中", -1)
+                      ])]),
+                      _: 1
+                    }),
+                    createVNode(_component_el_radio, {
+                      value: "delete_all",
+                      class: "radio-option danger-option"
+                    }, {
+                      default: withCtx(() => [..._cache[41] || (_cache[41] = [
+                        createBaseVNode("div", { class: "radio-title" }, "彻底删除分组及组内所有方案", -1),
+                        createBaseVNode("div", { class: "radio-desc" }, "将同步彻底销毁底层的物理文件目录，操作极其危险且不可恢复！", -1)
+                      ])]),
+                      _: 1
+                    })
+                  ]),
+                  _: 1
+                }, 8, ["modelValue"])
+              ]),
+              _: 1
+            }, 8, ["modelValue"]),
+            createVNode(_component_el_dialog, {
+              modelValue: showClearAccountDialog.value,
+              "onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => showClearAccountDialog.value = $event),
+              title: "批量清除账号",
+              width: "520px",
+              "destroy-on-close": "",
+              "close-on-click-modal": !isClearingAccounts.value,
+              "close-on-press-escape": !isClearingAccounts.value,
+              "show-close": !isClearingAccounts.value
+            }, {
+              footer: withCtx(() => [
+                createBaseVNode("span", _hoisted_57, [
+                  createVNode(_component_el_button, {
+                    disabled: isClearingAccounts.value,
+                    onClick: _cache[16] || (_cache[16] = ($event) => showClearAccountDialog.value = false)
+                  }, {
+                    default: withCtx(() => [..._cache[45] || (_cache[45] = [
+                      createTextVNode("取消", -1)
+                    ])]),
+                    _: 1
+                  }, 8, ["disabled"]),
+                  createVNode(_component_el_button, {
+                    type: "danger",
+                    disabled: isClearingAccounts.value,
+                    onClick: confirmClearAccounts
+                  }, {
+                    default: withCtx(() => [..._cache[46] || (_cache[46] = [
+                      createTextVNode(" 开始清除 ", -1)
+                    ])]),
+                    _: 1
+                  }, 8, ["disabled"])
+                ])
+              ]),
+              default: withCtx(() => [
+                createBaseVNode("div", {
+                  ref_key: "clearAccountDialogBodyRef",
+                  ref: clearAccountDialogBodyRef,
+                  class: "clear-account-dialog-body"
+                }, [
+                  _cache[44] || (_cache[44] = createBaseVNode("div", { style: { "margin-bottom": "12px", "font-size": "14px", "color": "#606266", "line-height": "1.6" } }, [
+                    createTextVNode(" 每行输入一个账号，将在"),
+                    createBaseVNode("strong", null, "所有方案"),
+                    createTextVNode("的账号列表 Excel 中查找并删除对应行（按「账号」列精确匹配）。 ")
+                  ], -1)),
+                  createVNode(_component_el_input, {
+                    modelValue: clearAccountInput.value,
+                    "onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => clearAccountInput.value = $event),
+                    class: "clear-account-textarea",
+                    type: "textarea",
+                    rows: 12,
+                    placeholder: "账号1\n账号2\n账号3"
+                  }, null, 8, ["modelValue"])
+                ], 512)
+              ]),
+              _: 1
+            }, 8, ["modelValue", "close-on-click-modal", "close-on-press-escape", "show-close"]),
+            createVNode(_component_el_dialog, {
+              modelValue: showClearAccountResultDialog.value,
+              "onUpdate:modelValue": _cache[19] || (_cache[19] = ($event) => showClearAccountResultDialog.value = $event),
+              title: "清除完成",
+              width: "520px",
+              "destroy-on-close": ""
+            }, {
+              footer: withCtx(() => [
+                createVNode(_component_el_button, {
+                  type: "primary",
+                  onClick: _cache[18] || (_cache[18] = ($event) => showClearAccountResultDialog.value = false)
+                }, {
+                  default: withCtx(() => [..._cache[50] || (_cache[50] = [
+                    createTextVNode("知道了", -1)
+                  ])]),
+                  _: 1
+                })
+              ]),
+              default: withCtx(() => [
+                createBaseVNode("div", _hoisted_58, [
+                  _cache[47] || (_cache[47] = createTextVNode(" 共 ", -1)),
+                  createBaseVNode("b", null, toDisplayString(clearAccountResultSummary.value.hitCount), 1),
+                  _cache[48] || (_cache[48] = createTextVNode(" 个方案、合计删除 ", -1)),
+                  createBaseVNode("b", null, toDisplayString(clearAccountResultSummary.value.totalDeleted), 1),
+                  _cache[49] || (_cache[49] = createTextVNode(" 条 ", -1))
+                ]),
+                createVNode(_component_el_scrollbar, { "max-height": "50vh" }, {
+                  default: withCtx(() => [
+                    createBaseVNode("div", _hoisted_59, [
+                      (openBlock(true), createElementBlock(Fragment, null, renderList(clearAccountResultList.value, (item) => {
+                        return openBlock(), createElementBlock("div", {
+                          key: item.profileName,
+                          class: "clear-result-item"
+                        }, " 【" + toDisplayString(item.group) + " / " + toDisplayString(item.profileName) + "】删除 " + toDisplayString(item.deletedCount) + " 条 ", 1);
+                      }), 128))
+                    ])
+                  ]),
+                  _: 1
+                }),
+                _cache[51] || (_cache[51] = createBaseVNode("div", { class: "clear-result-backup-tip" }, " 账号数据已变更，请尽快点击左下角「点我备份」同步到云端，避免恢复时数据回退。 ", -1))
+              ]),
+              _: 1
+            }, 8, ["modelValue"])
           ]);
         };
       }
-    };
-    const ConfigTab = /* @__PURE__ */ _export_sfc(_sfc_main$2, [["__scopeId", "data-v-b79ef927"]]);
-    const _hoisted_1$1 = { class: "card" };
-    const _hoisted_2$1 = { class: "row" };
-    const _hoisted_3$1 = ["value"];
-    const _hoisted_4$1 = { class: "row mt-15 border-top" };
-    const _hoisted_5$1 = ["value"];
-    const _hoisted_6$1 = { class: "row" };
-    const _hoisted_7$1 = ["value"];
-    const _hoisted_8$1 = { class: "card" };
-    const _hoisted_9$1 = { class: "row" };
-    const _hoisted_10$1 = ["value"];
-    const _hoisted_11$1 = { class: "row" };
-    const _hoisted_12 = { class: "row" };
-    const _hoisted_13 = { class: "radio-group" };
-    const _hoisted_14 = { class: "radio-item" };
-    const _hoisted_15 = ["checked"];
-    const _hoisted_16 = { class: "radio-item" };
-    const _hoisted_17 = ["checked"];
-    const _hoisted_18 = { class: "row" };
-    const _hoisted_19 = ["value", "disabled"];
-    const _hoisted_20 = { class: "row" };
-    const _hoisted_21 = ["value", "disabled"];
-    const _hoisted_22 = { class: "footer-actions" };
-    const _sfc_main$1 = {
+    });
+    const ConfigTab = /* @__PURE__ */ _export_sfc(_sfc_main$3, [["__scopeId", "data-v-33c2df36"]]);
+    const _hoisted_1$2 = { class: "card" };
+    const _hoisted_2$2 = { class: "row" };
+    const _hoisted_3$2 = ["value"];
+    const _hoisted_4$2 = { class: "row mt-15 border-top" };
+    const _hoisted_5$2 = ["value"];
+    const _hoisted_6$2 = { class: "row" };
+    const _hoisted_7$2 = ["value"];
+    const _hoisted_8$2 = { class: "card" };
+    const _hoisted_9$2 = { class: "row" };
+    const _hoisted_10$2 = ["value"];
+    const _hoisted_11$2 = { class: "row" };
+    const _hoisted_12$2 = { class: "row" };
+    const _hoisted_13$2 = { class: "radio-group" };
+    const _hoisted_14$1 = { class: "radio-item" };
+    const _hoisted_15$1 = ["checked"];
+    const _hoisted_16$1 = { class: "radio-item" };
+    const _hoisted_17$1 = ["checked"];
+    const _hoisted_18$1 = { class: "row" };
+    const _hoisted_19$1 = ["value", "disabled"];
+    const _hoisted_20$1 = { class: "row" };
+    const _hoisted_21$1 = ["value", "disabled"];
+    const _hoisted_22$1 = { class: "footer-actions" };
+    const _sfc_main$2 = /* @__PURE__ */ Object.assign({
+      name: "SettingsTab"
+    }, {
       __name: "SettingsTab",
       props: ["settings"],
       emits: ["update:settings", "save-settings"],
@@ -83629,39 +85518,39 @@ var require_index_001 = __commonJS({
           const _component_el_option = resolveComponent("el-option");
           const _component_el_select = resolveComponent("el-select");
           return openBlock(), createElementBlock(Fragment, null, [
-            createBaseVNode("div", _hoisted_1$1, [
+            createBaseVNode("div", _hoisted_1$2, [
               _cache[13] || (_cache[13] = createBaseVNode("h3", null, "🔑 授权与账号 (全局生效)", -1)),
-              createBaseVNode("div", _hoisted_2$1, [
+              createBaseVNode("div", _hoisted_2$2, [
                 _cache[10] || (_cache[10] = createBaseVNode("span", { class: "label" }, "授权卡密:", -1)),
                 createBaseVNode("input", {
                   value: __props.settings.userKey,
                   class: "flex-1",
                   placeholder: "请输入授权激活码",
                   onInput: _cache[0] || (_cache[0] = ($event) => update("userKey", $event.target.value))
-                }, null, 40, _hoisted_3$1)
+                }, null, 40, _hoisted_3$2)
               ]),
-              createBaseVNode("div", _hoisted_4$1, [
+              createBaseVNode("div", _hoisted_4$2, [
                 _cache[11] || (_cache[11] = createBaseVNode("span", { class: "label" }, "易投账号:", -1)),
                 createBaseVNode("input", {
                   value: __props.settings.workingAccount,
                   class: "flex-1",
                   placeholder: "登录账号",
                   onInput: _cache[1] || (_cache[1] = ($event) => update("workingAccount", $event.target.value))
-                }, null, 40, _hoisted_5$1)
+                }, null, 40, _hoisted_5$2)
               ]),
-              createBaseVNode("div", _hoisted_6$1, [
+              createBaseVNode("div", _hoisted_6$2, [
                 _cache[12] || (_cache[12] = createBaseVNode("span", { class: "label" }, "易投密码:", -1)),
                 createBaseVNode("input", {
                   value: __props.settings.workingPassword,
                   class: "flex-1",
                   placeholder: "登录密码 (明文)",
                   onInput: _cache[2] || (_cache[2] = ($event) => update("workingPassword", $event.target.value))
-                }, null, 40, _hoisted_7$1)
+                }, null, 40, _hoisted_7$2)
               ])
             ]),
-            createBaseVNode("div", _hoisted_8$1, [
+            createBaseVNode("div", _hoisted_8$2, [
               _cache[22] || (_cache[22] = createBaseVNode("h3", null, "📊 任务参数控制", -1)),
-              createBaseVNode("div", _hoisted_9$1, [
+              createBaseVNode("div", _hoisted_9$2, [
                 _cache[14] || (_cache[14] = createBaseVNode("span", { class: "label" }, "账号匹配数:", -1)),
                 createBaseVNode("input", {
                   value: __props.settings.accountMatchCount,
@@ -83669,10 +85558,10 @@ var require_index_001 = __commonJS({
                   min: "1",
                   style: { "width": "60px" },
                   onInput: _cache[3] || (_cache[3] = ($event) => update("accountMatchCount", +$event.target.value))
-                }, null, 40, _hoisted_10$1),
+                }, null, 40, _hoisted_10$2),
                 _cache[15] || (_cache[15] = createBaseVNode("span", { style: { "font-size": "12px", "color": "#999", "margin-left": "10px" } }, "(每个模板最多匹配的账号数量)", -1))
               ]),
-              createBaseVNode("div", _hoisted_11$1, [
+              createBaseVNode("div", _hoisted_11$2, [
                 _cache[16] || (_cache[16] = createBaseVNode("span", { class: "label" }, "素材榜单时间范围:", -1)),
                 createVNode(_component_el_select, {
                   "model-value": __props.settings.dateRange || "",
@@ -83725,30 +85614,30 @@ var require_index_001 = __commonJS({
                   _: 1
                 }, 8, ["model-value"])
               ]),
-              createBaseVNode("div", _hoisted_12, [
+              createBaseVNode("div", _hoisted_12$2, [
                 _cache[19] || (_cache[19] = createBaseVNode("span", { class: "label" }, "账号平铺:", -1)),
-                createBaseVNode("div", _hoisted_13, [
-                  createBaseVNode("label", _hoisted_14, [
+                createBaseVNode("div", _hoisted_13$2, [
+                  createBaseVNode("label", _hoisted_14$1, [
                     createBaseVNode("input", {
                       type: "radio",
                       name: "tiling",
                       checked: __props.settings.isAccountFlat === true,
                       onChange: _cache[5] || (_cache[5] = ($event) => handleTilingChange(true))
-                    }, null, 40, _hoisted_15),
+                    }, null, 40, _hoisted_15$1),
                     _cache[17] || (_cache[17] = createTextVNode(" 是 ", -1))
                   ]),
-                  createBaseVNode("label", _hoisted_16, [
+                  createBaseVNode("label", _hoisted_16$1, [
                     createBaseVNode("input", {
                       type: "radio",
                       name: "tiling",
                       checked: __props.settings.isAccountFlat === false,
                       onChange: _cache[6] || (_cache[6] = ($event) => handleTilingChange(false))
-                    }, null, 40, _hoisted_17),
+                    }, null, 40, _hoisted_17$1),
                     _cache[18] || (_cache[18] = createTextVNode(" 否 ", -1))
                   ])
                 ])
               ]),
-              createBaseVNode("div", _hoisted_18, [
+              createBaseVNode("div", _hoisted_18$1, [
                 _cache[20] || (_cache[20] = createBaseVNode("span", { class: "label" }, "项目数:", -1)),
                 createBaseVNode("input", {
                   value: __props.settings.projectNum,
@@ -83758,9 +85647,9 @@ var require_index_001 = __commonJS({
                   style: { "width": "60px" },
                   class: normalizeClass({ "input-disabled": __props.settings.isAccountFlat }),
                   onInput: _cache[7] || (_cache[7] = ($event) => update("projectNum", +$event.target.value))
-                }, null, 42, _hoisted_19)
+                }, null, 42, _hoisted_19$1)
               ]),
-              createBaseVNode("div", _hoisted_20, [
+              createBaseVNode("div", _hoisted_20$1, [
                 _cache[21] || (_cache[21] = createBaseVNode("span", { class: "label" }, "广告数:", -1)),
                 createBaseVNode("input", {
                   value: __props.settings.adsNum,
@@ -83770,10 +85659,10 @@ var require_index_001 = __commonJS({
                   style: { "width": "60px" },
                   class: normalizeClass({ "input-disabled": __props.settings.isAccountFlat }),
                   onInput: _cache[8] || (_cache[8] = ($event) => update("adsNum", +$event.target.value))
-                }, null, 42, _hoisted_21)
+                }, null, 42, _hoisted_21$1)
               ])
             ]),
-            createBaseVNode("div", _hoisted_22, [
+            createBaseVNode("div", _hoisted_22$1, [
               unref(isDev) ? (openBlock(), createElementBlock("button", {
                 key: 0,
                 class: "btn-dev",
@@ -83787,34 +85676,1121 @@ var require_index_001 = __commonJS({
           ], 64);
         };
       }
+    });
+    const SettingsTab = /* @__PURE__ */ _export_sfc(_sfc_main$2, [["__scopeId", "data-v-9cdb0b69"]]);
+    const _hoisted_1$1 = ["element-loading-text"];
+    const _hoisted_2$1 = { class: "profile-select-section" };
+    const _hoisted_3$1 = { class: "row-flex" };
+    const _hoisted_4$1 = { style: { "display": "flex", "justify-content": "space-between", "align-items": "center" } };
+    const _hoisted_5$1 = { style: { "color": "#909399", "font-size": "12px" } };
+    const _hoisted_6$1 = {
+      key: 0,
+      class: "selected-tags-box"
     };
-    const SettingsTab = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["__scopeId", "data-v-fdc705d5"]]);
+    const _hoisted_7$1 = { class: "settings-wrapper" };
+    const _hoisted_8$1 = { class: "setting-group" };
+    const _hoisted_9$1 = {
+      class: "group-desc",
+      style: { "display": "flex", "justify-content": "space-between", "align-items": "center" }
+    };
+    const _hoisted_10$1 = { class: "settings-wrapper" };
+    const _hoisted_11$1 = { class: "setting-group" };
+    const _hoisted_12$1 = { class: "filter-container" };
+    const _hoisted_13$1 = { class: "setting-row" };
+    const _hoisted_14 = { class: "custom-input-box" };
+    const _hoisted_15 = {
+      class: "setting-row",
+      style: { "margin-top": "10px" }
+    };
+    const _hoisted_16 = { class: "custom-input-box" };
+    const _hoisted_17 = { class: "controls-container" };
+    const _hoisted_18 = { class: "auto-controls" };
+    const _hoisted_19 = { class: "auto-box" };
+    const _hoisted_20 = { style: { "display": "flex", "justify-content": "space-between", "align-items": "center" } };
+    const _hoisted_21 = {
+      key: 0,
+      style: { "text-align": "center", "padding": "40px 0", "color": "#909399" }
+    };
+    const _hoisted_22 = { key: 1 };
+    const _hoisted_23 = { style: { "margin-top": "15px", "text-align": "right", "color": "#999", "font-size": "12px" } };
+    const _hoisted_24 = { class: "dialog-footer" };
+    const _hoisted_25 = {
+      key: 0,
+      class: "cruise-overlay"
+    };
+    const _hoisted_26 = { class: "cruise-panel" };
+    const _hoisted_27 = {
+      class: "cp-header",
+      style: { "justify-content": "space-between", "width": "100%" }
+    };
+    const _hoisted_28 = { class: "cp-time" };
+    const _hoisted_29 = { style: { "font-weight": "bold" } };
+    const _hoisted_30 = { style: { "font-family": "monospace", "font-size": "16px", "letter-spacing": "1px" } };
+    const _hoisted_31 = { class: "cp-steps" };
+    const _hoisted_32 = { class: "cp-content" };
+    const _hoisted_33 = {
+      key: 0,
+      class: "content-box publishing-box"
+    };
+    const _hoisted_34 = { style: { "font-weight": "bold", "margin-bottom": "10px", "color": "#e6a23c" } };
+    const _hoisted_35 = { class: "tags-wrapper" };
+    const _hoisted_36 = {
+      key: 1,
+      class: "content-box empty-box"
+    };
+    const _hoisted_37 = {
+      key: 2,
+      class: "content-box empty-box fetching-box"
+    };
+    const _hoisted_38 = { class: "cp-footer" };
+    const _sfc_main$1 = /* @__PURE__ */ Object.assign({
+      name: "DataFetchTab"
+    }, {
+      __name: "DataFetchTab",
+      props: ["allProfiles", "profileOrder"],
+      emits: ["cruise-status-change"],
+      setup(__props, { emit: __emit }) {
+        const props2 = __props;
+        const emit2 = __emit;
+        const isFetching = /* @__PURE__ */ ref(false);
+        const isAutoRunning = /* @__PURE__ */ ref(false);
+        const intervalMin = /* @__PURE__ */ ref(30);
+        const goodDramas = /* @__PURE__ */ ref([]);
+        const showTableDialog = /* @__PURE__ */ ref(false);
+        const selectedProfiles = /* @__PURE__ */ ref([]);
+        const showPublishedDialog = /* @__PURE__ */ ref(false);
+        const todayPublishedList = /* @__PURE__ */ ref([]);
+        const loadingText = /* @__PURE__ */ ref("🚀 正在检索cbo漫剧数据，请稍候...");
+        const currentPhase = /* @__PURE__ */ ref("waiting");
+        const currentBatch = /* @__PURE__ */ ref([]);
+        const cruiseStartTime = /* @__PURE__ */ ref(null);
+        const startTimeStr = /* @__PURE__ */ ref("");
+        const cruiseDuration = /* @__PURE__ */ ref("00:00:00");
+        let durationTimer = null;
+        watch(isAutoRunning, (newVal) => {
+          emit2("cruise-status-change", newVal);
+        });
+        const getTodayString = () => {
+          const d2 = /* @__PURE__ */ new Date();
+          const t = new Date(d2.getTime() - d2.getTimezoneOffset() * 6e4);
+          return t.toISOString().split("T")[0];
+        };
+        const fetchDateRange = /* @__PURE__ */ ref([getTodayString(), getTodayString()]);
+        const fetchParams = /* @__PURE__ */ ref({
+          carrier: "link",
+          copyrightType: "分销",
+          source: "ZZFQ",
+          linkType: "IAP",
+          roiThreshold: "0.7"
+        });
+        const exportConfig = /* @__PURE__ */ ref({
+          copyright: "ZZ番茄",
+          materialCount: "30"
+        });
+        const groupedProfilesForSelect = computed(() => {
+          if (!props2.allProfiles) return [];
+          const orderedNames = Array.isArray(props2.profileOrder) && props2.profileOrder.length > 0 ? props2.profileOrder.filter((name) => props2.allProfiles[name]) : Object.keys(props2.allProfiles);
+          const names2 = [
+            ...orderedNames,
+            ...Object.keys(props2.allProfiles).filter((name) => !orderedNames.includes(name))
+          ];
+          const groupsMap = /* @__PURE__ */ new Map();
+          groupsMap.set("默认分组", []);
+          names2.forEach((name) => {
+            const groupName = props2.allProfiles[name].group || "默认分组";
+            if (!groupsMap.has(groupName)) {
+              groupsMap.set(groupName, []);
+            }
+            groupsMap.get(groupName).push(name);
+          });
+          const result = [];
+          for (const [gName, pList] of groupsMap.entries()) {
+            if (pList.length > 0 || gName === "默认分组") {
+              result.push({ label: `📂 ${gName}`, options: pList });
+            }
+          }
+          return result;
+        });
+        const selectAllProfiles = () => {
+          if (props2.allProfiles) {
+            const orderedNames = Array.isArray(props2.profileOrder) && props2.profileOrder.length > 0 ? props2.profileOrder.filter((name) => props2.allProfiles[name]) : Object.keys(props2.allProfiles);
+            selectedProfiles.value = [
+              ...orderedNames,
+              ...Object.keys(props2.allProfiles).filter((name) => !orderedNames.includes(name))
+            ];
+          }
+        };
+        const removeSelectedProfile = (name) => {
+          selectedProfiles.value = selectedProfiles.value.filter((p2) => p2 !== name);
+        };
+        const openProfileFolder = (name) => {
+          if (window.api && window.api.openProfileFolder) {
+            window.api.openProfileFolder(name);
+          }
+        };
+        const validateRoi = () => {
+          let val = parseFloat(fetchParams.value.roiThreshold);
+          if (isNaN(val) || val < 0) val = 0.7;
+          fetchParams.value.roiThreshold = val.toString();
+        };
+        const validateNumber = (key, defaultVal) => {
+          let val = parseInt(exportConfig.value[key]);
+          if (isNaN(val) || val <= 0) val = defaultVal;
+          exportConfig.value[key] = val.toString();
+        };
+        const normalizeDramaName = (name) => {
+          return String(name || "").trim().replace(/\u3000/g, " ").replace(/\s+/g, " ").toLowerCase();
+        };
+        const parseRoiValue = (roi) => {
+          if (typeof roi === "number") return Number.isFinite(roi) ? roi : -Infinity;
+          const raw = String(roi ?? "").trim();
+          if (!raw) return -Infinity;
+          const match = raw.match(/-?\d+(\.\d+)?/);
+          if (!match) return -Infinity;
+          const value = parseFloat(match[0]);
+          return Number.isFinite(value) ? value : -Infinity;
+        };
+        const dedupeDramasByBookName = (list = []) => {
+          const bestByName = /* @__PURE__ */ new Map();
+          list.forEach((item) => {
+            const normalizedName = normalizeDramaName(item?.bookName);
+            if (!normalizedName) return;
+            const currentBest = bestByName.get(normalizedName);
+            if (!currentBest) {
+              bestByName.set(normalizedName, item);
+              return;
+            }
+            const currentRoi = parseRoiValue(currentBest?.roi);
+            const nextRoi = parseRoiValue(item?.roi);
+            if (nextRoi > currentRoi) {
+              bestByName.set(normalizedName, item);
+            }
+          });
+          return Array.from(bestByName.values());
+        };
+        const startDurationTimer = () => {
+          const now2 = /* @__PURE__ */ new Date();
+          cruiseStartTime.value = now2;
+          startTimeStr.value = now2.toLocaleTimeString();
+          if (durationTimer) clearInterval(durationTimer);
+          durationTimer = setInterval(() => {
+            const diff = Math.floor((/* @__PURE__ */ new Date() - cruiseStartTime.value) / 1e3);
+            const h2 = String(Math.floor(diff / 3600)).padStart(2, "0");
+            const m2 = String(Math.floor(diff % 3600 / 60)).padStart(2, "0");
+            const s2 = String(diff % 60).padStart(2, "0");
+            cruiseDuration.value = `${h2}:${m2}:${s2}`;
+          }, 1e3);
+        };
+        const stopDurationTimer = () => {
+          if (durationTimer) clearInterval(durationTimer);
+          cruiseDuration.value = "00:00:00";
+          startTimeStr.value = "";
+          currentPhase.value = "waiting";
+          currentBatch.value = [];
+        };
+        const handleSaveSettings = async () => {
+          validateRoi();
+          validateNumber("materialCount", 30);
+          const payload = {
+            fetchParams: JSON.parse(JSON.stringify(fetchParams.value)),
+            exportConfig: JSON.parse(JSON.stringify(exportConfig.value)),
+            intervalMin: intervalMin.value
+          };
+          try {
+            if (window.api && window.api.saveFetchSettings) {
+              const res = await window.api.saveFetchSettings(payload);
+              if (res.success) {
+                ElMessage.success("配置已成功保存！");
+              } else {
+                ElMessage.error("保存失败: " + res.msg);
+              }
+            } else {
+              ElMessage.warning("接口未连接，前端已记录数据 (请在 preload/main 中实现 saveFetchSettings)");
+            }
+          } catch (err) {
+            ElMessage.error("系统异常: " + err.message);
+          }
+        };
+        onMounted(async () => {
+          try {
+            if (window.api && window.api.getFetchSettings) {
+              const res = await window.api.getFetchSettings();
+              if (res.success && res.data) {
+                if (res.data.fetchParams) {
+                  Object.assign(fetchParams.value, res.data.fetchParams);
+                }
+                if (res.data.exportConfig) {
+                  Object.assign(exportConfig.value, res.data.exportConfig);
+                }
+                if (res.data.intervalMin) {
+                  intervalMin.value = res.data.intervalMin;
+                }
+              }
+            }
+          } catch (e) {
+            console.error("加载预设配置失败:", e);
+          }
+          window.api.onFetchLogUpdate((data) => {
+            if (data.type === "progress") {
+              loadingText.value = `🚀 正在检索 [${data.dateRange}] 的数据，已抓取 ${data.count} 条 (共 ${data.total} 条) ...可随时点击中止`;
+            } else if (data.type === "data") {
+              const dedupedList = dedupeDramasByBookName(data.list);
+              goodDramas.value = dedupedList;
+              if (isAutoRunning.value) {
+                currentBatch.value = dedupedList;
+                dedupedList.forEach((item) => {
+                  const normalizedName = normalizeDramaName(item.bookName);
+                  const existed = todayPublishedList.value.some((name) => normalizeDramaName(name) === normalizedName);
+                  if (!existed) {
+                    todayPublishedList.value.push(item.bookName);
+                  }
+                });
+              }
+            } else if (data.type === "status") {
+              isAutoRunning.value = data.isRunning;
+              if (!data.isRunning) stopDurationTimer();
+            } else if (data.type === "error") {
+              ElMessage.error(data.msg);
+              if (isAutoRunning.value && data.msg.includes("后台巡航抓取失败")) {
+                currentPhase.value = "waiting";
+              }
+            } else if (data.type === "success") {
+              if (!data.msg.includes("📝 [防重记录]")) {
+                ElMessage.success(data.msg);
+              }
+              if (data.msg.includes("📝 [防重记录] 今日全网已发剧集")) {
+                try {
+                  const rawNames = data.msg.split("): ")[1];
+                  if (rawNames) {
+                    todayPublishedList.value = rawNames.split("、").map((n) => n.trim()).filter((n) => n);
+                  }
+                } catch (e) {
+                }
+              } else if (data.msg.includes("📝 [防重记录] 经核对，今日全网暂无上剧记录")) {
+                todayPublishedList.value = [];
+              }
+              if (isAutoRunning.value) {
+                if (data.msg.includes("正在按条件执行后台自动巡航")) {
+                  currentPhase.value = "fetching";
+                } else if (data.msg.includes("准备触发自动化上剧") || data.msg.includes("将为您自动分发")) {
+                  currentPhase.value = "publishing";
+                } else if (data.msg.includes("任务执行完毕") || data.msg.includes("本次巡航未发现") || data.msg.includes("跳过上剧")) {
+                  currentPhase.value = "waiting";
+                }
+              }
+            }
+          });
+        });
+        const handleManualFetch = async () => {
+          validateRoi();
+          isFetching.value = true;
+          goodDramas.value = [];
+          const sDay = fetchDateRange.value?.[0] || getTodayString();
+          const eDay = fetchDateRange.value?.[1] || getTodayString();
+          loadingText.value = `🚀 正在准备拉取 [${sDay} 至 ${eDay}] 的漫剧，建立连接中...`;
+          const finalParams = JSON.parse(JSON.stringify(fetchParams.value));
+          finalParams.roiThreshold = parseFloat(finalParams.roiThreshold);
+          if (fetchDateRange.value && fetchDateRange.value.length === 2) {
+            finalParams.startDay = fetchDateRange.value[0];
+            finalParams.endDay = fetchDateRange.value[1];
+          } else {
+            finalParams.startDay = getTodayString();
+            finalParams.endDay = getTodayString();
+          }
+          try {
+            const res = await window.api.fetchGoodDramas(finalParams);
+            if (res.success) {
+              const dedupedList = dedupeDramasByBookName(res.data);
+              goodDramas.value = dedupedList;
+              ElMessage.success(`抓取成功！发现 ${dedupedList.length} 部漫剧`);
+            } else if (res.msg === "CANCELLED") {
+              ElMessage.warning("已成功中止抓取！");
+            } else {
+              ElMessage.error("抓取失败: " + res.msg);
+            }
+          } catch (error) {
+            ElMessage.error("系统异常");
+          } finally {
+            isFetching.value = false;
+            setTimeout(() => {
+              loadingText.value = "🚀 正在全网检索漫剧数据，请稍候...";
+            }, 500);
+          }
+        };
+        const cancelFetch = () => {
+          window.api.cancelFetchDramas();
+          loadingText.value = "🛑 正在请求中止，等待当前页返回...";
+          ElMessage.warning("正在请求中止，请稍候...");
+        };
+        const clearDramasResult = () => {
+          goodDramas.value = [];
+          showTableDialog.value = false;
+          ElMessage.success("已清空抓取结果");
+        };
+        const handleExportExcel = async () => {
+          if (goodDramas.value.length === 0) return;
+          validateNumber("materialCount", 30);
+          try {
+            const res = await window.api.exportDramasExcel({
+              dramas: JSON.parse(JSON.stringify(goodDramas.value)),
+              config: JSON.parse(JSON.stringify(exportConfig.value))
+            });
+            if (res.success) ElMessage.success(`导出成功！文件已保存至: ${res.filePath}`);
+            else if (res.msg !== "取消下载") ElMessage.error("导出失败: " + res.msg);
+          } catch (err) {
+            ElMessage.error("系统异常: " + err.message);
+          }
+        };
+        const handleCopyText = async () => {
+          if (goodDramas.value.length === 0) return;
+          const copyright = exportConfig.value.copyright || "";
+          const copyString = goodDramas.value.map((item) => `${copyright}		${item.bookName}`).join("\n");
+          try {
+            await navigator.clipboard.writeText(copyString);
+            ElMessage.success("已复制到剪贴板，可直接前往 Excel 粘贴！");
+          } catch (err) {
+            ElMessage.error("复制失败，请重试或检查浏览器权限");
+          }
+        };
+        const toggleAutoRun = () => {
+          if (isAutoRunning.value) {
+            window.api.stopAutoFetch();
+            isAutoRunning.value = false;
+            stopDurationTimer();
+          } else {
+            if (selectedProfiles.value.length === 0) {
+              ElMessage.error("🛑 开启失败！请至少在下方勾选一个【自动化上剧目标方案】");
+              return;
+            }
+            const today = getTodayString();
+            fetchDateRange.value = [today, today];
+            ElMessage.info("已自动将抓取范围锁定为今日数据");
+            validateRoi();
+            validateNumber("materialCount", 30);
+            ElMessage.success(`已开启后台自动巡航，每 ${intervalMin.value} 分钟执行一次`);
+            const finalParams = JSON.parse(JSON.stringify(fetchParams.value));
+            finalParams.roiThreshold = parseFloat(finalParams.roiThreshold);
+            finalParams.startDay = today;
+            finalParams.endDay = today;
+            startDurationTimer();
+            currentPhase.value = "fetching";
+            isAutoRunning.value = true;
+            window.api.startAutoFetch({
+              interval: intervalMin.value,
+              ...finalParams,
+              exportConfig: JSON.parse(JSON.stringify(exportConfig.value)),
+              selectedProfiles: JSON.parse(JSON.stringify(selectedProfiles.value))
+            });
+          }
+        };
+        return (_ctx, _cache) => {
+          const _component_el_option = resolveComponent("el-option");
+          const _component_el_option_group = resolveComponent("el-option-group");
+          const _component_el_select = resolveComponent("el-select");
+          const _component_el_button = resolveComponent("el-button");
+          const _component_el_tag = resolveComponent("el-tag");
+          const _component_el_card = resolveComponent("el-card");
+          const _component_el_date_picker = resolveComponent("el-date-picker");
+          const _component_el_input = resolveComponent("el-input");
+          const _component_el_divider = resolveComponent("el-divider");
+          const _component_el_table_column = resolveComponent("el-table-column");
+          const _component_el_table = resolveComponent("el-table");
+          const _component_el_dialog = resolveComponent("el-dialog");
+          const _component_el_icon = resolveComponent("el-icon");
+          const _directive_loading = resolveDirective("loading");
+          return withDirectives((openBlock(), createElementBlock("div", {
+            class: "fetch-container",
+            "element-loading-text": loadingText.value
+          }, [
+            createVNode(_component_el_card, {
+              shadow: "never",
+              class: "data-card",
+              style: { "height": "300px", "display": "flex", "flex-direction": "column" }
+            }, {
+              default: withCtx(() => [
+                _cache[20] || (_cache[20] = createBaseVNode("div", {
+                  class: "group-desc",
+                  style: { "margin-bottom": "12px", "font-size": "14px" }
+                }, [
+                  createTextVNode(" 🤖 自动化上剧目标方案 "),
+                  createBaseVNode("span", { class: "desc-light" }, "(勾选后，后台巡航抓取到漫剧时，将自动为您分发到以下选中方案)")
+                ], -1)),
+                createBaseVNode("div", _hoisted_2$1, [
+                  createBaseVNode("div", _hoisted_3$1, [
+                    _cache[19] || (_cache[19] = createBaseVNode("span", { style: { "width": "90px", "color": "#606266", "font-size": "14px", "font-weight": "bold", "flex-shrink": "0" } }, " 运行方案： ", -1)),
+                    createVNode(_component_el_select, {
+                      modelValue: selectedProfiles.value,
+                      "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => selectedProfiles.value = $event),
+                      multiple: "",
+                      "collapse-tags": "",
+                      "collapse-tags-tooltip": "",
+                      filterable: "",
+                      clearable: "",
+                      placeholder: "搜索或在分组中选择 (支持多选)",
+                      style: { "flex": "1" }
+                    }, {
+                      default: withCtx(() => [
+                        (openBlock(true), createElementBlock(Fragment, null, renderList(groupedProfilesForSelect.value, (group) => {
+                          return openBlock(), createBlock(_component_el_option_group, {
+                            key: group.label,
+                            label: group.label
+                          }, {
+                            default: withCtx(() => [
+                              (openBlock(true), createElementBlock(Fragment, null, renderList(group.options, (name) => {
+                                return openBlock(), createBlock(_component_el_option, {
+                                  key: name,
+                                  label: name,
+                                  value: name
+                                }, {
+                                  default: withCtx(() => [
+                                    createBaseVNode("div", _hoisted_4$1, [
+                                      createBaseVNode("span", null, toDisplayString(name), 1),
+                                      createBaseVNode("span", _hoisted_5$1, toDisplayString(__props.allProfiles[name]?.businessType), 1)
+                                    ])
+                                  ]),
+                                  _: 2
+                                }, 1032, ["label", "value"]);
+                              }), 128))
+                            ]),
+                            _: 2
+                          }, 1032, ["label"]);
+                        }), 128))
+                      ]),
+                      _: 1
+                    }, 8, ["modelValue"]),
+                    createVNode(_component_el_button, {
+                      type: "primary",
+                      link: "",
+                      onClick: selectAllProfiles,
+                      style: { "margin-left": "10px" }
+                    }, {
+                      default: withCtx(() => [..._cache[17] || (_cache[17] = [
+                        createTextVNode(" [全选] ", -1)
+                      ])]),
+                      _: 1
+                    }),
+                    createVNode(_component_el_button, {
+                      type: "danger",
+                      link: "",
+                      onClick: _cache[1] || (_cache[1] = ($event) => selectedProfiles.value = [])
+                    }, {
+                      default: withCtx(() => [..._cache[18] || (_cache[18] = [
+                        createTextVNode(" [清空] ", -1)
+                      ])]),
+                      _: 1
+                    })
+                  ]),
+                  selectedProfiles.value.length > 0 ? (openBlock(), createElementBlock("div", _hoisted_6$1, [
+                    (openBlock(true), createElementBlock(Fragment, null, renderList(selectedProfiles.value, (name) => {
+                      return openBlock(), createBlock(_component_el_tag, {
+                        key: name,
+                        closable: "",
+                        type: "primary",
+                        effect: "light",
+                        "disable-transitions": "",
+                        style: { "cursor": "pointer" },
+                        title: "点击打开该方案的本地文件夹",
+                        onClick: ($event) => openProfileFolder(name),
+                        onClose: ($event) => removeSelectedProfile(name)
+                      }, {
+                        default: withCtx(() => [
+                          createTextVNode(toDisplayString(name), 1)
+                        ]),
+                        _: 2
+                      }, 1032, ["onClick", "onClose"]);
+                    }), 128))
+                  ])) : createCommentVNode("", true)
+                ])
+              ]),
+              _: 1
+            }),
+            createVNode(_component_el_card, {
+              shadow: "never",
+              class: "control-card"
+            }, {
+              default: withCtx(() => [
+                createBaseVNode("div", _hoisted_7$1, [
+                  createBaseVNode("div", _hoisted_8$1, [
+                    createBaseVNode("div", _hoisted_9$1, [
+                      _cache[22] || (_cache[22] = createBaseVNode("span", null, [
+                        createTextVNode("⚙️ 抓取与生成参数 "),
+                        createBaseVNode("span", { class: "desc-light" }, "(应用于检索过滤与自动上剧预设)--(默认条件-端原生-IAP-分销-最大转化)--(修改后请点击保存，以免丢失)")
+                      ], -1)),
+                      createVNode(_component_el_button, {
+                        type: "primary",
+                        text: "",
+                        bg: "",
+                        size: "small",
+                        onClick: handleSaveSettings,
+                        disabled: isAutoRunning.value
+                      }, {
+                        default: withCtx(() => [..._cache[21] || (_cache[21] = [
+                          createTextVNode(" 💾 保存当前配置 ", -1)
+                        ])]),
+                        _: 1
+                      }, 8, ["disabled"])
+                    ]),
+                    createBaseVNode("div", _hoisted_10$1, [
+                      createBaseVNode("div", _hoisted_11$1, [
+                        createBaseVNode("div", _hoisted_12$1, [
+                          createBaseVNode("div", _hoisted_13$1, [
+                            _cache[24] || (_cache[24] = createBaseVNode("span", { class: "row-label" }, "🔍 抓取过滤：", -1)),
+                            createVNode(_component_el_date_picker, {
+                              modelValue: fetchDateRange.value,
+                              "onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => fetchDateRange.value = $event),
+                              type: "daterange",
+                              "range-separator": "至",
+                              "start-placeholder": "开始日期",
+                              "end-placeholder": "结束日期",
+                              "value-format": "YYYY-MM-DD",
+                              disabled: isAutoRunning.value,
+                              clearable: false
+                            }, null, 8, ["modelValue", "disabled"]),
+                            createVNode(_component_el_select, {
+                              modelValue: fetchParams.value.source,
+                              "onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => fetchParams.value.source = $event),
+                              placeholder: "平台 (默认全选)",
+                              class: "filter-item-small",
+                              filterable: "",
+                              clearable: "",
+                              disabled: isAutoRunning.value
+                            }, {
+                              default: withCtx(() => [
+                                createVNode(_component_el_option, {
+                                  label: "指针番茄",
+                                  value: "ZZFQ"
+                                }),
+                                createVNode(_component_el_option, {
+                                  label: "点众(端)",
+                                  value: "DZ"
+                                }),
+                                createVNode(_component_el_option, {
+                                  label: "番茄(端)",
+                                  value: "FQ"
+                                })
+                              ]),
+                              _: 1
+                            }, 8, ["modelValue", "disabled"]),
+                            createBaseVNode("div", _hoisted_14, [
+                              _cache[23] || (_cache[23] = createBaseVNode("span", { class: "custom-label" }, "ROI >", -1)),
+                              createVNode(_component_el_input, {
+                                modelValue: fetchParams.value.roiThreshold,
+                                "onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => fetchParams.value.roiThreshold = $event),
+                                placeholder: "0.7",
+                                class: "custom-input",
+                                disabled: isAutoRunning.value,
+                                onInput: _cache[5] || (_cache[5] = ($event) => fetchParams.value.roiThreshold = fetchParams.value.roiThreshold.replace(/[^0-9.]/g, "")),
+                                onBlur: validateRoi
+                              }, null, 8, ["modelValue", "disabled"])
+                            ])
+                          ]),
+                          createBaseVNode("div", _hoisted_15, [
+                            _cache[28] || (_cache[28] = createBaseVNode("span", { class: "row-label" }, "📝 生成剧单预设：", -1)),
+                            createVNode(_component_el_input, {
+                              modelValue: exportConfig.value.copyright,
+                              "onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => exportConfig.value.copyright = $event),
+                              placeholder: "如: ZZ番茄",
+                              class: "filter-item-middle",
+                              disabled: isAutoRunning.value
+                            }, {
+                              prepend: withCtx(() => [..._cache[25] || (_cache[25] = [
+                                createTextVNode("默认版权", -1)
+                              ])]),
+                              _: 1
+                            }, 8, ["modelValue", "disabled"]),
+                            createBaseVNode("div", _hoisted_16, [
+                              _cache[26] || (_cache[26] = createBaseVNode("span", { class: "custom-label" }, "素材数", -1)),
+                              createVNode(_component_el_input, {
+                                modelValue: exportConfig.value.materialCount,
+                                "onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => exportConfig.value.materialCount = $event),
+                                placeholder: "30",
+                                class: "custom-input",
+                                disabled: isAutoRunning.value,
+                                onInput: _cache[8] || (_cache[8] = ($event) => exportConfig.value.materialCount = exportConfig.value.materialCount.replace(/[^0-9]/g, "")),
+                                onBlur: _cache[9] || (_cache[9] = ($event) => validateNumber("materialCount", 30))
+                              }, null, 8, ["modelValue", "disabled"]),
+                              _cache[27] || (_cache[27] = createBaseVNode("span", { class: "custom-suffix" }, "个", -1))
+                            ])
+                          ])
+                        ])
+                      ])
+                    ])
+                  ])
+                ]),
+                createVNode(_component_el_divider, { style: { "margin": "12px 0" } }),
+                createBaseVNode("div", _hoisted_17, [
+                  createBaseVNode("div", {
+                    class: normalizeClass(["manual-controls", { "elevate-controls": isFetching.value }])
+                  }, [
+                    createVNode(_component_el_button, {
+                      type: isFetching.value ? "danger" : "primary",
+                      onClick: _cache[10] || (_cache[10] = ($event) => isFetching.value ? cancelFetch() : handleManualFetch())
+                    }, {
+                      default: withCtx(() => [
+                        createTextVNode(toDisplayString(isFetching.value ? "⏹ 中止抓取" : "获取起量剧单"), 1)
+                      ]),
+                      _: 1
+                    }, 8, ["type"]),
+                    createVNode(_component_el_button, {
+                      type: "info",
+                      plain: "",
+                      disabled: goodDramas.value.length === 0,
+                      onClick: _cache[11] || (_cache[11] = ($event) => showTableDialog.value = true)
+                    }, {
+                      default: withCtx(() => [
+                        createTextVNode(" 👀 查看结果 (" + toDisplayString(goodDramas.value.length) + ") ", 1)
+                      ]),
+                      _: 1
+                    }, 8, ["disabled"]),
+                    createVNode(_component_el_button, {
+                      type: "warning",
+                      plain: "",
+                      disabled: goodDramas.value.length === 0,
+                      onClick: handleExportExcel
+                    }, {
+                      default: withCtx(() => [..._cache[29] || (_cache[29] = [
+                        createTextVNode(" 导出剧单 ", -1)
+                      ])]),
+                      _: 1
+                    }, 8, ["disabled"]),
+                    createVNode(_component_el_button, {
+                      type: "success",
+                      plain: "",
+                      disabled: goodDramas.value.length === 0,
+                      onClick: handleCopyText
+                    }, {
+                      default: withCtx(() => [..._cache[30] || (_cache[30] = [
+                        createTextVNode(" 复制文本 ", -1)
+                      ])]),
+                      _: 1
+                    }, 8, ["disabled"])
+                  ], 2),
+                  createBaseVNode("div", _hoisted_18, [
+                    createBaseVNode("div", _hoisted_19, [
+                      _cache[32] || (_cache[32] = createBaseVNode("span", { style: { "margin-right": "8px", "font-size": "13px", "font-weight": "bold" } }, "自动巡航：", -1)),
+                      createVNode(_component_el_select, {
+                        modelValue: intervalMin.value,
+                        "onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => intervalMin.value = $event),
+                        style: { "width": "150px", "margin-right": "8px" }
+                      }, {
+                        default: withCtx(() => [
+                          createVNode(_component_el_option, {
+                            label: "每 20 分钟",
+                            value: 20
+                          }),
+                          createVNode(_component_el_option, {
+                            label: "每 30 分钟",
+                            value: 30
+                          }),
+                          createVNode(_component_el_option, {
+                            label: "每 1 小时",
+                            value: 60
+                          }),
+                          createVNode(_component_el_option, {
+                            label: "每 2 小时",
+                            value: 120
+                          })
+                        ]),
+                        _: 1
+                      }, 8, ["modelValue"]),
+                      createVNode(_component_el_button, {
+                        type: "success",
+                        onClick: toggleAutoRun
+                      }, {
+                        default: withCtx(() => [..._cache[31] || (_cache[31] = [
+                          createTextVNode(" 🚀 开启自动巡航 + 自动上剧 ", -1)
+                        ])]),
+                        _: 1
+                      })
+                    ])
+                  ])
+                ])
+              ]),
+              _: 1
+            }),
+            createVNode(_component_el_dialog, {
+              modelValue: showTableDialog.value,
+              "onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => showTableDialog.value = $event),
+              width: "75%",
+              top: "8vh",
+              "destroy-on-close": "",
+              "show-close": false
+            }, {
+              header: withCtx(({ close: close2 }) => [
+                createBaseVNode("div", _hoisted_20, [
+                  _cache[35] || (_cache[35] = createBaseVNode("span", { style: { "font-size": "16px", "font-weight": "bold" } }, "👀 漫剧剧单抓取结果", -1)),
+                  createBaseVNode("div", null, [
+                    createVNode(_component_el_button, {
+                      type: "danger",
+                      size: "small",
+                      plain: "",
+                      onClick: clearDramasResult,
+                      style: { "margin-right": "15px" }
+                    }, {
+                      default: withCtx(() => [..._cache[33] || (_cache[33] = [
+                        createTextVNode(" 🗑️ 清空结果 ", -1)
+                      ])]),
+                      _: 1
+                    }),
+                    createVNode(_component_el_button, {
+                      type: "info",
+                      text: "",
+                      bg: "",
+                      onClick: close2,
+                      style: { "padding": "5px 10px" }
+                    }, {
+                      default: withCtx(() => [..._cache[34] || (_cache[34] = [
+                        createTextVNode("关闭", -1)
+                      ])]),
+                      _: 1
+                    }, 8, ["onClick"])
+                  ])
+                ])
+              ]),
+              default: withCtx(() => [
+                createVNode(_component_el_table, {
+                  data: goodDramas.value,
+                  border: "",
+                  stripe: "",
+                  height: "500px",
+                  size: "small"
+                }, {
+                  default: withCtx(() => [
+                    createVNode(_component_el_table_column, {
+                      type: "index",
+                      label: "序号",
+                      width: "60",
+                      align: "center"
+                    }),
+                    createVNode(_component_el_table_column, {
+                      prop: "bookName",
+                      label: "剧名",
+                      "min-width": "200"
+                    }),
+                    createVNode(_component_el_table_column, {
+                      prop: "roi",
+                      label: "今日 ROI (首日)",
+                      width: "120",
+                      align: "center"
+                    }, {
+                      default: withCtx((scope) => [
+                        createVNode(_component_el_tag, {
+                          type: "danger",
+                          effect: "dark",
+                          round: "",
+                          size: "small"
+                        }, {
+                          default: withCtx(() => [
+                            createTextVNode(toDisplayString(scope.row.roi), 1)
+                          ]),
+                          _: 2
+                        }, 1024)
+                      ]),
+                      _: 1
+                    }),
+                    createVNode(_component_el_table_column, {
+                      prop: "cost",
+                      label: "消耗金额",
+                      width: "100",
+                      align: "center"
+                    }),
+                    createVNode(_component_el_table_column, {
+                      prop: "fetchTime",
+                      label: "检索时间",
+                      width: "140",
+                      align: "center"
+                    })
+                  ]),
+                  _: 1
+                }, 8, ["data"])
+              ]),
+              _: 1
+            }, 8, ["modelValue"]),
+            createVNode(_component_el_dialog, {
+              modelValue: showPublishedDialog.value,
+              "onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => showPublishedDialog.value = $event),
+              title: "📅 今日全网防重已发剧单",
+              top: "4vh",
+              width: "500px",
+              "append-to-body": "",
+              "destroy-on-close": ""
+            }, {
+              footer: withCtx(() => [
+                createBaseVNode("span", _hoisted_24, [
+                  createVNode(_component_el_button, {
+                    type: "primary",
+                    onClick: _cache[14] || (_cache[14] = ($event) => showPublishedDialog.value = false)
+                  }, {
+                    default: withCtx(() => [..._cache[39] || (_cache[39] = [
+                      createTextVNode("关闭窗口", -1)
+                    ])]),
+                    _: 1
+                  })
+                ])
+              ]),
+              default: withCtx(() => [
+                todayPublishedList.value.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_21, [
+                  createVNode(_component_el_icon, { size: "40" }, {
+                    default: withCtx(() => [
+                      createVNode(unref(document_delete_default))
+                    ]),
+                    _: 1
+                  }),
+                  _cache[36] || (_cache[36] = createBaseVNode("div", { style: { "margin-top": "10px" } }, "今日暂无上剧记录，配额充足", -1))
+                ])) : (openBlock(), createElementBlock("div", _hoisted_22, [
+                  _cache[38] || (_cache[38] = createBaseVNode("div", { style: { "margin-bottom": "10px", "color": "#666", "font-size": "13px" } }, " 💡 记录当前卡密在所有设备上今日已成功分发的漫剧 ", -1)),
+                  createVNode(_component_el_table, {
+                    data: todayPublishedList.value.map((name, index) => ({ id: index + 1, name })),
+                    border: "",
+                    stripe: "",
+                    "max-height": "450px",
+                    size: "small",
+                    "header-cell-style": { background: "#f5f7fa", color: "#606266" }
+                  }, {
+                    default: withCtx(() => [
+                      createVNode(_component_el_table_column, {
+                        prop: "id",
+                        label: "序号",
+                        width: "70",
+                        align: "center"
+                      }),
+                      createVNode(_component_el_table_column, {
+                        prop: "name",
+                        label: "已发剧名",
+                        "min-width": "200"
+                      }),
+                      createVNode(_component_el_table_column, {
+                        label: "状态",
+                        width: "100",
+                        align: "center"
+                      }, {
+                        default: withCtx(() => [
+                          createVNode(_component_el_tag, {
+                            type: "success",
+                            size: "small",
+                            effect: "plain"
+                          }, {
+                            default: withCtx(() => [..._cache[37] || (_cache[37] = [
+                              createTextVNode("已拦截", -1)
+                            ])]),
+                            _: 1
+                          })
+                        ]),
+                        _: 1
+                      })
+                    ]),
+                    _: 1
+                  }, 8, ["data"]),
+                  createBaseVNode("div", _hoisted_23, " 共计：" + toDisplayString(todayPublishedList.value.length) + " 部 ", 1)
+                ]))
+              ]),
+              _: 1
+            }, 8, ["modelValue"]),
+            createVNode(Transition, { name: "fade" }, {
+              default: withCtx(() => [
+                isAutoRunning.value ? (openBlock(), createElementBlock("div", _hoisted_25, [
+                  createBaseVNode("div", _hoisted_26, [
+                    createBaseVNode("div", _hoisted_27, [
+                      _cache[40] || (_cache[40] = createBaseVNode("div", { style: { "display": "flex", "align-items": "center", "gap": "15px" } }, [
+                        createBaseVNode("div", { class: "radar-spinner" }),
+                        createBaseVNode("h2", { style: { "margin": "0", "color": "#303133", "letter-spacing": "1px" } }, "自动巡航及上剧引擎运行中")
+                      ], -1)),
+                      createVNode(_component_el_button, {
+                        type: "primary",
+                        plain: "",
+                        round: "",
+                        onClick: _cache[16] || (_cache[16] = ($event) => showPublishedDialog.value = true)
+                      }, {
+                        default: withCtx(() => [
+                          createVNode(_component_el_icon, { style: { "margin-right": "4px" } }, {
+                            default: withCtx(() => [
+                              createVNode(unref(tickets_default))
+                            ]),
+                            _: 1
+                          }),
+                          createTextVNode(" 今日已发 (" + toDisplayString(todayPublishedList.value.length) + ") ", 1)
+                        ]),
+                        _: 1
+                      })
+                    ]),
+                    createBaseVNode("div", _hoisted_28, [
+                      createVNode(_component_el_tag, {
+                        type: "info",
+                        size: "large",
+                        effect: "plain"
+                      }, {
+                        default: withCtx(() => [
+                          _cache[41] || (_cache[41] = createTextVNode(" 启动时间：", -1)),
+                          createBaseVNode("span", _hoisted_29, toDisplayString(startTimeStr.value), 1)
+                        ]),
+                        _: 1
+                      }),
+                      createVNode(_component_el_tag, {
+                        type: "success",
+                        size: "large",
+                        effect: "dark",
+                        style: { "margin-left": "15px", "font-size": "14px" }
+                      }, {
+                        default: withCtx(() => [
+                          _cache[42] || (_cache[42] = createTextVNode(" 持续运行：", -1)),
+                          createBaseVNode("span", _hoisted_30, toDisplayString(cruiseDuration.value), 1)
+                        ]),
+                        _: 1
+                      })
+                    ]),
+                    createBaseVNode("div", _hoisted_31, [
+                      createBaseVNode("div", {
+                        class: normalizeClass(["cp-step", { active: currentPhase.value === "waiting" }])
+                      }, [
+                        currentPhase.value === "waiting" ? (openBlock(), createBlock(_component_el_icon, {
+                          key: 0,
+                          class: "is-loading"
+                        }, {
+                          default: withCtx(() => [
+                            createVNode(unref(loading_default))
+                          ]),
+                          _: 1
+                        })) : createCommentVNode("", true),
+                        _cache[43] || (_cache[43] = createTextVNode(" 1. 循环倒计时 ", -1))
+                      ], 2),
+                      createVNode(_component_el_icon, { class: "step-arrow" }, {
+                        default: withCtx(() => [
+                          createVNode(unref(arrow_right_default))
+                        ]),
+                        _: 1
+                      }),
+                      createBaseVNode("div", {
+                        class: normalizeClass(["cp-step", { active: currentPhase.value === "fetching" }])
+                      }, [
+                        currentPhase.value === "fetching" ? (openBlock(), createBlock(_component_el_icon, {
+                          key: 0,
+                          class: "is-loading"
+                        }, {
+                          default: withCtx(() => [
+                            createVNode(unref(loading_default))
+                          ]),
+                          _: 1
+                        })) : createCommentVNode("", true),
+                        _cache[44] || (_cache[44] = createTextVNode(" 2. 雷达检索cbo漫剧 ", -1))
+                      ], 2),
+                      createVNode(_component_el_icon, { class: "step-arrow" }, {
+                        default: withCtx(() => [
+                          createVNode(unref(arrow_right_default))
+                        ]),
+                        _: 1
+                      }),
+                      createBaseVNode("div", {
+                        class: normalizeClass(["cp-step", { active: currentPhase.value === "publishing" }])
+                      }, [
+                        currentPhase.value === "publishing" ? (openBlock(), createBlock(_component_el_icon, {
+                          key: 0,
+                          class: "is-loading"
+                        }, {
+                          default: withCtx(() => [
+                            createVNode(unref(loading_default))
+                          ]),
+                          _: 1
+                        })) : createCommentVNode("", true),
+                        _cache[45] || (_cache[45] = createTextVNode(" 3. 分发多方案上剧 ", -1))
+                      ], 2)
+                    ]),
+                    createBaseVNode("div", _hoisted_32, [
+                      currentPhase.value === "publishing" && currentBatch.value.length > 0 ? (openBlock(), createElementBlock("div", _hoisted_33, [
+                        createBaseVNode("div", _hoisted_34, " 正在分发上剧 (共 " + toDisplayString(currentBatch.value.length) + " 部)： ", 1),
+                        createBaseVNode("div", _hoisted_35, [
+                          (openBlock(true), createElementBlock(Fragment, null, renderList(currentBatch.value, (d2) => {
+                            return openBlock(), createBlock(_component_el_tag, {
+                              key: d2.bookName,
+                              size: "default",
+                              type: "warning",
+                              effect: "dark"
+                            }, {
+                              default: withCtx(() => [
+                                createTextVNode(toDisplayString(d2.bookName), 1)
+                              ]),
+                              _: 2
+                            }, 1024);
+                          }), 128))
+                        ])
+                      ])) : currentPhase.value === "waiting" ? (openBlock(), createElementBlock("div", _hoisted_36, [
+                        createVNode(_component_el_icon, {
+                          size: "30",
+                          color: "#c0c4cc"
+                        }, {
+                          default: withCtx(() => [
+                            createVNode(unref(timer_default))
+                          ]),
+                          _: 1
+                        }),
+                        _cache[46] || (_cache[46] = createBaseVNode("div", { style: { "margin-top": "10px" } }, "当前任务已完成，等待下一轮巡航周期触发...", -1))
+                      ])) : currentPhase.value === "fetching" ? (openBlock(), createElementBlock("div", _hoisted_37, [
+                        createVNode(_component_el_icon, {
+                          size: "30",
+                          color: "#409eff",
+                          class: "is-loading"
+                        }, {
+                          default: withCtx(() => [
+                            createVNode(unref(loading_default))
+                          ]),
+                          _: 1
+                        }),
+                        _cache[47] || (_cache[47] = createBaseVNode("div", { style: { "margin-top": "10px", "color": "#409eff" } }, "正在拉取平台大盘数据，请耐心等待...", -1))
+                      ])) : createCommentVNode("", true)
+                    ]),
+                    createBaseVNode("div", _hoisted_38, [
+                      createVNode(_component_el_button, {
+                        type: "danger",
+                        size: "large",
+                        onClick: toggleAutoRun,
+                        style: { "width": "200px", "font-weight": "bold" }
+                      }, {
+                        default: withCtx(() => [..._cache[48] || (_cache[48] = [
+                          createTextVNode(" ⏹ 停止自动巡航 ", -1)
+                        ])]),
+                        _: 1
+                      })
+                    ])
+                  ])
+                ])) : createCommentVNode("", true)
+              ]),
+              _: 1
+            })
+          ], 8, _hoisted_1$1)), [
+            [_directive_loading, isFetching.value]
+          ]);
+        };
+      }
+    });
+    const DataFetchTab = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["__scopeId", "data-v-36afe5a8"]]);
     const _hoisted_1 = { class: "app-container" };
     const _hoisted_2 = { class: "nav-header" };
-    const _hoisted_3 = { class: "tab-content" };
-    const _hoisted_4 = {
+    const _hoisted_3 = { class: "instance-badge" };
+    const _hoisted_4 = { class: "instance-sync-text" };
+    const _hoisted_5 = { class: "tab-content" };
+    const _hoisted_6 = {
       key: 0,
       class: "download-overlay"
     };
-    const _hoisted_5 = { class: "download-card" };
-    const _hoisted_6 = { style: { "line-height": "1.8", "font-size": "15px", "padding": "0 10px" } };
-    const _hoisted_7 = { style: { "color": "#409eff", "margin-top": "0" } };
-    const _hoisted_8 = {
+    const _hoisted_7 = { class: "download-card" };
+    const _hoisted_8 = { style: { "line-height": "1.8", "font-size": "15px", "padding": "0 10px" } };
+    const _hoisted_9 = { style: { "color": "#409eff", "margin-top": "0" } };
+    const _hoisted_10 = {
       key: 0,
       style: { "color": "#999", "text-align": "center", "padding": "30px 0" }
     };
-    const _hoisted_9 = {
+    const _hoisted_11 = {
       key: 1,
       style: { "padding-left": "20px", "margin-bottom": "0" }
     };
-    const _hoisted_10 = ["innerHTML"];
-    const _hoisted_11 = { class: "dialog-footer" };
+    const _hoisted_12 = ["innerHTML"];
+    const _hoisted_13 = { class: "dialog-footer" };
     const _sfc_main = {
       __name: "App",
       setup(__props) {
         const currentTab = /* @__PURE__ */ ref("run");
         const logs = /* @__PURE__ */ ref([]);
         const allProfiles = /* @__PURE__ */ ref({});
+        const profileOrder = /* @__PURE__ */ ref([]);
         const settings = /* @__PURE__ */ ref({
           userKey: "",
           workingAccount: "",
@@ -83823,18 +86799,37 @@ var require_index_001 = __commonJS({
           projectNum: 1,
           adsNum: 1,
           isAccountFlat: false,
-          dateRange: ""
+          dateRange: "",
+          profileSets: []
         });
         const lastConfig = /* @__PURE__ */ ref({});
         const appVersion = /* @__PURE__ */ ref("1.0.0");
+        const instanceId = /* @__PURE__ */ ref("");
         const isRunning = /* @__PURE__ */ ref(false);
+        const instanceDisplayName = computed(() => instanceId.value ? instanceId.value : "默认");
+        const isRefreshingInstance = /* @__PURE__ */ ref(false);
+        const lastRefreshAt = /* @__PURE__ */ ref("");
+        const refreshStatusText = computed(() => {
+          if (isRefreshingInstance.value) return "正在刷新";
+          return lastRefreshAt.value ? `已同步 (${lastRefreshAt.value})` : "待同步";
+        });
+        const isCruiseRunning = /* @__PURE__ */ ref(false);
         const isDownloading = /* @__PURE__ */ ref(false);
         const downloadPercent = /* @__PURE__ */ ref(0);
         const showUpdateLog = /* @__PURE__ */ ref(false);
         const isLoadingLog = /* @__PURE__ */ ref(false);
         const updateContent = /* @__PURE__ */ ref([]);
+        const isCheckingUpdate = /* @__PURE__ */ ref(false);
+        let updateTimeoutTimer = null;
         const preventDefaultDrop = (e) => {
           e.preventDefault();
+        };
+        const handleTabSwitch = (tabName) => {
+          if (isCruiseRunning.value && tabName !== "dataFetch") {
+            ElMessage.warning("🛑 自动巡航及上剧引擎正在后台运行中，请先停止巡航后再切换页面！");
+            return;
+          }
+          currentTab.value = tabName;
         };
         const fetchUpdateLog = async (version2) => {
           isLoadingLog.value = true;
@@ -83857,40 +86852,102 @@ var require_index_001 = __commonJS({
             }
           } catch (error) {
             console.error("获取更新日志失败:", error);
-            updateContent.value = [
-              "✨ 优化了系统核心机制，执行效率大幅提升",
-              "🛡️ 强化了 API 请求的安全防护策略"
-            ];
           } finally {
             isLoadingLog.value = false;
+          }
+        };
+        const manualCheckUpdate = () => {
+          if (isCheckingUpdate.value) return;
+          isCheckingUpdate.value = true;
+          updateTimeoutTimer = setTimeout(() => {
+            if (isCheckingUpdate.value) {
+              isCheckingUpdate.value = false;
+              ElMessage.warning("检测更新超时，请检查网络状态或稍后再试");
+            }
+          }, 15e3);
+          if (window.api && window.api.checkForUpdates) {
+            window.api.checkForUpdates();
+          } else {
+            ElMessage.error("更新组件未初始化");
+            isCheckingUpdate.value = false;
+            clearTimeout(updateTimeoutTimer);
+          }
+        };
+        function pruneProfileSetsAgainstProfiles(sets, existingKeySet) {
+          const list = Array.isArray(sets) ? sets : [];
+          let changed = false;
+          const pruned = list.map((s2) => {
+            const arr = Array.isArray(s2?.profiles) ? s2.profiles : [];
+            const next = arr.filter((name) => existingKeySet.has(name));
+            if (next.length !== arr.length) changed = true;
+            return { ...s2, profiles: next };
+          });
+          return { pruned, changed };
+        }
+        const applyInitSettingsData = (data) => {
+          if (!data) return;
+          if (data.profiles) allProfiles.value = data.profiles;
+          profileOrder.value = Array.isArray(data.profileOrder) ? data.profileOrder : Object.keys(data.profiles || {});
+          if (data.lastConfig) lastConfig.value = data.lastConfig;
+          const existingKeys = new Set(Object.keys(data.profiles || {}));
+          let profileSets = Array.isArray(data.profileSets) ? data.profileSets : [];
+          const profileSetsPrune = pruneProfileSetsAgainstProfiles(profileSets, existingKeys);
+          if (profileSetsPrune.changed) profileSets = profileSetsPrune.pruned;
+          settings.value = {
+            userKey: data.KEY_CONFIG?.userKey || "",
+            workingAccount: data.WORKING_CONFIG?.account || data.WORKING_CONFIG?.acount || "",
+            workingPassword: data.WORKING_CONFIG?.password || "",
+            globalDramaList: data.FILES?.globalDramaList || "",
+            accountMatchCount: data.SETTINGS?.ACCOUNT_MATCH_COUNT || 2,
+            pageNum: data.FILES?.PAGE_NUM || 20,
+            projectNum: data.FILES?.PROJECT_NUM ?? 1,
+            adsNum: data.FILES?.ADS_NUM ?? 1,
+            isAccountFlat: data.FILES?.isAccountFlat || false,
+            dateRange: data.FILES?.dateRange || "",
+            profileSets
+          };
+          if (profileSetsPrune.changed && window.api?.saveSettings) {
+            window.api.saveSettings(JSON.parse(JSON.stringify(settings.value)));
+          }
+          if (data.appVersion) {
+            appVersion.value = data.appVersion;
+          }
+          instanceId.value = (data.instanceId || "").toString().trim();
+          lastRefreshAt.value = (/* @__PURE__ */ new Date()).toLocaleTimeString();
+        };
+        const refreshCurrentInstanceSettings = async () => {
+          if (!window.api?.reloadCurrentInstanceSettings) {
+            ElMessage.warning("当前版本不支持实例刷新");
+            return;
+          }
+          try {
+            isRefreshingInstance.value = true;
+            const data = await window.api.reloadCurrentInstanceSettings();
+            applyInitSettingsData(data);
+            ElMessage.success("当前实例配置已刷新");
+          } catch (error) {
+            ElMessage.error(`刷新失败: ${error.message || error}`);
+          } finally {
+            isRefreshingInstance.value = false;
           }
         };
         onMounted(() => {
           window.api.onInitSettings((data) => {
             console.log("📖 收到初始化数据:", data);
-            if (data.profiles) allProfiles.value = data.profiles;
-            if (data.lastConfig) lastConfig.value = data.lastConfig;
-            settings.value = {
-              userKey: data.KEY_CONFIG?.userKey || "",
-              workingAccount: data.WORKING_CONFIG?.account || "",
-              workingPassword: data.WORKING_CONFIG?.password || "",
-              globalDramaList: data.FILES?.globalDramaList || "",
-              accountMatchCount: data.SETTINGS?.ACCOUNT_MATCH_COUNT || 2,
-              pageNum: data.FILES?.PAGE_NUM || 20,
-              projectNum: data.FILES?.PROJECT_NUM ?? 1,
-              adsNum: data.FILES?.ADS_NUM ?? 1,
-              isAccountFlat: data.FILES?.isAccountFlat || false,
-              dateRange: data.FILES?.dateRange || ""
-            };
-            if (data.appVersion) {
-              appVersion.value = data.appVersion;
-            }
+            applyInitSettingsData(data);
             if (data.isUpdated) {
               showUpdateLog.value = true;
               fetchUpdateLog(data.appVersion);
             }
           });
           window.api.onUpdateMessage((data) => {
+            if (["available", "latest", "error"].includes(data.type)) {
+              isCheckingUpdate.value = false;
+              if (updateTimeoutTimer) {
+                clearTimeout(updateTimeoutTimer);
+                updateTimeoutTimer = null;
+              }
+            }
             if (data.type === "available") {
               ElMessageBox.confirm(
                 `检测到新版本 v${data.version}，是否立即更新并重启软件？`,
@@ -83917,7 +86974,6 @@ var require_index_001 = __commonJS({
                 {
                   confirmButtonText: "立即安装",
                   showCancelButton: false,
-                  // 强制更新建议不给取消
                   type: "success",
                   closeOnClickModal: false,
                   closeOnPressEscape: false
@@ -83926,8 +86982,9 @@ var require_index_001 = __commonJS({
                 window.api.confirmInstall();
               }).catch(() => {
               });
-            } else if (data.type === "latest") ;
-            else if (data.type === "error") {
+            } else if (data.type === "latest") {
+              ElMessage.success("当前已经是最新版本！");
+            } else if (data.type === "error") {
               isDownloading.value = false;
               ElMessage.error(`更新包下载失败: ${data.msg}`);
             }
@@ -83937,8 +86994,18 @@ var require_index_001 = __commonJS({
               window.api.checkForUpdates();
             }
           }, 3e3);
+          let logBuffer = [];
+          let flushLogTimer = null;
           window.api.onLogUpdate((msg) => {
-            logs.value.push(msg);
+            logBuffer.push(msg);
+            if (!flushLogTimer) {
+              flushLogTimer = setTimeout(() => {
+                const combinedLogs = [...logs.value, ...logBuffer];
+                logs.value = combinedLogs.length > 500 ? combinedLogs.slice(-500) : combinedLogs;
+                logBuffer = [];
+                flushLogTimer = null;
+              }, 100);
+            }
           });
           window.api.onTaskStatusChange((status) => {
             console.log("主进程发来的状态变了！现在是：", status);
@@ -83951,6 +87018,18 @@ var require_index_001 = __commonJS({
           document.removeEventListener("dragover", preventDefaultDrop);
           document.removeEventListener("drop", preventDefaultDrop);
         });
+        const handleSaveProfileSets = (val) => {
+          settings.value.profileSets = val;
+          if (window.api && window.api.saveSettings) {
+            window.api.saveSettings(JSON.parse(JSON.stringify(settings.value)));
+          }
+        };
+        const handleUpdateGlobalDrama = (val) => {
+          settings.value.globalDramaList = val ?? "";
+          if (window.api?.saveSettings) {
+            window.api.saveSettings(JSON.parse(JSON.stringify(settings.value)));
+          }
+        };
         const handleSaveGlobalSettings = (data) => {
           settings.value = data;
           if (window.api && window.api.saveSettings) {
@@ -83958,9 +87037,30 @@ var require_index_001 = __commonJS({
             ElMessage.success("系统设置已保存并同步至本地");
           }
         };
-        const updateProfiles = (newProfiles) => {
-          allProfiles.value = newProfiles;
-          window.api.updateProfiles(JSON.parse(JSON.stringify(newProfiles)));
+        const updateProfiles = (payload) => {
+          const normalizedProfiles = payload?.profiles || payload || {};
+          const normalizedOrder = Array.isArray(payload?.profileOrder) ? payload.profileOrder : Object.keys(normalizedProfiles);
+          const existingKeys = new Set(Object.keys(normalizedProfiles));
+          const { pruned, changed } = pruneProfileSetsAgainstProfiles(
+            settings.value.profileSets,
+            existingKeys
+          );
+          if (changed) {
+            settings.value.profileSets = pruned;
+          }
+          allProfiles.value = normalizedProfiles;
+          profileOrder.value = normalizedOrder;
+          window.api.updateProfiles(
+            JSON.parse(
+              JSON.stringify({
+                profiles: normalizedProfiles,
+                profileOrder: normalizedOrder
+              })
+            )
+          );
+          if (changed && window.api?.saveSettings) {
+            window.api.saveSettings(JSON.parse(JSON.stringify(settings.value)));
+          }
         };
         const handleRunTask = (runConfig) => {
           if (!settings.value.userKey) {
@@ -83968,6 +87068,7 @@ var require_index_001 = __commonJS({
             currentTab.value = "settings";
             return;
           }
+          logs.value = [];
           const finalConfig = {
             ...runConfig,
             userKey: settings.value.userKey,
@@ -83985,17 +87086,63 @@ var require_index_001 = __commonJS({
         };
         return (_ctx, _cache) => {
           const _component_el_icon = resolveComponent("el-icon");
-          const _component_el_progress = resolveComponent("el-progress");
           const _component_el_button = resolveComponent("el-button");
+          const _component_el_progress = resolveComponent("el-progress");
           const _component_el_dialog = resolveComponent("el-dialog");
           return openBlock(), createElementBlock("div", _hoisted_1, [
             createBaseVNode("nav", null, [
               createBaseVNode("div", _hoisted_2, [
-                createBaseVNode("h2", null, "漫剧神器 v" + toDisplayString(appVersion.value), 1)
+                createBaseVNode("h2", null, "漫剧神器 v" + toDisplayString(appVersion.value), 1),
+                createBaseVNode("div", _hoisted_3, " 当前实例：" + toDisplayString(instanceDisplayName.value), 1),
+                createBaseVNode("div", _hoisted_4, " 配置状态：" + toDisplayString(refreshStatusText.value), 1),
+                createVNode(_component_el_button, {
+                  type: "primary",
+                  link: "",
+                  size: "small",
+                  style: { "margin-top": "6px", "color": "#a0cfff", "font-size": "12px", "width": "120px", "justify-content": "center" },
+                  disabled: isRefreshingInstance.value,
+                  onClick: refreshCurrentInstanceSettings
+                }, {
+                  default: withCtx(() => [
+                    isRefreshingInstance.value ? (openBlock(), createBlock(_component_el_icon, {
+                      key: 0,
+                      class: "is-loading"
+                    }, {
+                      default: withCtx(() => [
+                        createVNode(unref(loading_default))
+                      ]),
+                      _: 1
+                    })) : createCommentVNode("", true),
+                    createBaseVNode("span", null, toDisplayString(isRefreshingInstance.value ? "刷新中..." : "[刷新当前实例]"), 1)
+                  ]),
+                  _: 1
+                }, 8, ["disabled"]),
+                createVNode(_component_el_button, {
+                  type: "primary",
+                  link: "",
+                  size: "small",
+                  style: { "margin-top": "6px", "color": "#a0cfff", "font-size": "12px", "width": "120px", "justify-content": "center" },
+                  disabled: isCheckingUpdate.value,
+                  onClick: manualCheckUpdate
+                }, {
+                  default: withCtx(() => [
+                    isCheckingUpdate.value ? (openBlock(), createBlock(_component_el_icon, {
+                      key: 0,
+                      class: "is-loading"
+                    }, {
+                      default: withCtx(() => [
+                        createVNode(unref(loading_default))
+                      ]),
+                      _: 1
+                    })) : createCommentVNode("", true),
+                    createBaseVNode("span", null, toDisplayString(isCheckingUpdate.value ? "正在检测..." : "[手动检查新版本]"), 1)
+                  ]),
+                  _: 1
+                }, 8, ["disabled"])
               ]),
               createBaseVNode("div", {
-                class: normalizeClass(["nav-item", { active: currentTab.value === "run" }]),
-                onClick: _cache[0] || (_cache[0] = ($event) => currentTab.value = "run")
+                class: normalizeClass(["nav-item", { active: currentTab.value === "run", "is-locked": isCruiseRunning.value && currentTab.value !== "run" }]),
+                onClick: _cache[0] || (_cache[0] = ($event) => handleTabSwitch("run"))
               }, [
                 createVNode(_component_el_icon, null, {
                   default: withCtx(() => [
@@ -84003,11 +87150,23 @@ var require_index_001 = __commonJS({
                   ]),
                   _: 1
                 }),
-                _cache[8] || (_cache[8] = createTextVNode(" 运行任务 ", -1))
+                _cache[9] || (_cache[9] = createTextVNode(" 运行任务 ", -1))
               ], 2),
               createBaseVNode("div", {
-                class: normalizeClass(["nav-item", { active: currentTab.value === "config" }]),
-                onClick: _cache[1] || (_cache[1] = ($event) => currentTab.value = "config")
+                class: normalizeClass(["nav-item", { active: currentTab.value === "dataFetch" }]),
+                onClick: _cache[1] || (_cache[1] = ($event) => handleTabSwitch("dataFetch"))
+              }, [
+                createVNode(_component_el_icon, null, {
+                  default: withCtx(() => [
+                    createVNode(unref(data_line_default))
+                  ]),
+                  _: 1
+                }),
+                _cache[10] || (_cache[10] = createTextVNode(" 巡航任务 ", -1))
+              ], 2),
+              createBaseVNode("div", {
+                class: normalizeClass(["nav-item", { active: currentTab.value === "config", "is-locked": isCruiseRunning.value && currentTab.value !== "config" }]),
+                onClick: _cache[2] || (_cache[2] = ($event) => handleTabSwitch("config"))
               }, [
                 createVNode(_component_el_icon, null, {
                   default: withCtx(() => [
@@ -84015,11 +87174,11 @@ var require_index_001 = __commonJS({
                   ]),
                   _: 1
                 }),
-                _cache[9] || (_cache[9] = createTextVNode(" 方案配置 ", -1))
+                _cache[11] || (_cache[11] = createTextVNode(" 方案配置 ", -1))
               ], 2),
               createBaseVNode("div", {
-                class: normalizeClass(["nav-item", { active: currentTab.value === "settings" }]),
-                onClick: _cache[2] || (_cache[2] = ($event) => currentTab.value = "settings")
+                class: normalizeClass(["nav-item", { active: currentTab.value === "settings", "is-locked": isCruiseRunning.value && currentTab.value !== "settings" }]),
+                onClick: _cache[3] || (_cache[3] = ($event) => handleTabSwitch("settings"))
               }, [
                 createVNode(_component_el_icon, null, {
                   default: withCtx(() => [
@@ -84027,41 +87186,50 @@ var require_index_001 = __commonJS({
                   ]),
                   _: 1
                 }),
-                _cache[10] || (_cache[10] = createTextVNode(" 系统设置 ", -1))
+                _cache[12] || (_cache[12] = createTextVNode(" 系统设置 ", -1))
               ], 2)
             ]),
             createBaseVNode("main", null, [
-              createBaseVNode("div", _hoisted_3, [
-                currentTab.value === "run" ? (openBlock(), createBlock(RunTab, {
-                  key: 0,
-                  "is-running": isRunning.value,
-                  "all-profiles": allProfiles.value,
-                  logs: logs.value,
-                  "global-drama-list": settings.value.globalDramaList,
-                  onUpdateGlobalDrama: _cache[3] || (_cache[3] = (val) => {
-                    settings.value.globalDramaList = val;
-                    handleSaveGlobalSettings(settings.value);
-                  }),
-                  onRunTask: handleRunTask,
-                  onClearLogs: _cache[4] || (_cache[4] = ($event) => logs.value = [])
-                }, null, 8, ["is-running", "all-profiles", "logs", "global-drama-list"])) : createCommentVNode("", true),
-                currentTab.value === "config" ? (openBlock(), createBlock(ConfigTab, {
-                  key: 1,
-                  "all-profiles": allProfiles.value,
-                  "user-key": settings.value.userKey,
-                  onUpdateProfiles: updateProfiles
-                }, null, 8, ["all-profiles", "user-key"])) : createCommentVNode("", true),
-                currentTab.value === "settings" ? (openBlock(), createBlock(SettingsTab, {
-                  key: 2,
-                  settings: settings.value,
-                  "onUpdate:settings": _cache[5] || (_cache[5] = (val) => settings.value = val),
-                  onSaveSettings: handleSaveGlobalSettings
-                }, null, 8, ["settings"])) : createCommentVNode("", true)
+              createBaseVNode("div", _hoisted_5, [
+                (openBlock(), createBlock(KeepAlive, { include: ["RunTab", "DataFetchTab", "ConfigTab"] }, [
+                  currentTab.value === "run" ? (openBlock(), createBlock(RunTab, {
+                    key: 0,
+                    "is-running": isRunning.value,
+                    "all-profiles": allProfiles.value,
+                    "profile-order": profileOrder.value,
+                    logs: logs.value,
+                    "global-drama-list": settings.value.globalDramaList,
+                    "profile-sets": settings.value.profileSets || [],
+                    "working-account": settings.value.workingAccount,
+                    onUpdateGlobalDrama: handleUpdateGlobalDrama,
+                    onUpdateProfileSets: handleSaveProfileSets,
+                    onRunTask: handleRunTask,
+                    onClearLogs: _cache[4] || (_cache[4] = ($event) => logs.value = [])
+                  }, null, 8, ["is-running", "all-profiles", "profile-order", "logs", "global-drama-list", "profile-sets", "working-account"])) : currentTab.value === "dataFetch" ? (openBlock(), createBlock(DataFetchTab, {
+                    key: 1,
+                    "all-profiles": allProfiles.value,
+                    "profile-order": profileOrder.value,
+                    onCruiseStatusChange: _cache[5] || (_cache[5] = (status) => isCruiseRunning.value = status)
+                  }, null, 8, ["all-profiles", "profile-order"])) : currentTab.value === "config" ? (openBlock(), createBlock(ConfigTab, {
+                    key: 2,
+                    "all-profiles": allProfiles.value,
+                    "profile-order": profileOrder.value,
+                    "user-key": settings.value.userKey,
+                    "global-account-match-count": settings.value.accountMatchCount,
+                    onUpdateProfiles: updateProfiles,
+                    onUpdateProfileSets: handleSaveProfileSets
+                  }, null, 8, ["all-profiles", "profile-order", "user-key", "global-account-match-count"])) : currentTab.value === "settings" ? (openBlock(), createBlock(SettingsTab, {
+                    key: 3,
+                    settings: settings.value,
+                    "onUpdate:settings": _cache[6] || (_cache[6] = (val) => settings.value = val),
+                    onSaveSettings: handleSaveGlobalSettings
+                  }, null, 8, ["settings"])) : createCommentVNode("", true)
+                ], 1024))
               ])
             ]),
-            isDownloading.value ? (openBlock(), createElementBlock("div", _hoisted_4, [
-              createBaseVNode("div", _hoisted_5, [
-                _cache[11] || (_cache[11] = createBaseVNode("h3", null, "正在下载新版本...", -1)),
+            isDownloading.value ? (openBlock(), createElementBlock("div", _hoisted_6, [
+              createBaseVNode("div", _hoisted_7, [
+                _cache[13] || (_cache[13] = createBaseVNode("h3", null, "正在下载新版本...", -1)),
                 createVNode(_component_el_progress, {
                   percentage: downloadPercent.value,
                   "stroke-width": 18,
@@ -84069,26 +87237,26 @@ var require_index_001 = __commonJS({
                   striped: "",
                   "striped-flow": ""
                 }, null, 8, ["percentage"]),
-                _cache[12] || (_cache[12] = createBaseVNode("p", null, "下载过程中请勿关闭软件，完成后将自动提示安装", -1))
+                _cache[14] || (_cache[14] = createBaseVNode("p", null, "下载过程中请勿关闭软件，完成后将自动提示安装", -1))
               ])
             ])) : createCommentVNode("", true),
             createVNode(_component_el_dialog, {
               modelValue: showUpdateLog.value,
-              "onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => showUpdateLog.value = $event),
+              "onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => showUpdateLog.value = $event),
               title: "🎉 更新公告",
               width: "550px",
               "close-on-click-modal": false,
               "destroy-on-close": ""
             }, {
               footer: withCtx(() => [
-                createBaseVNode("span", _hoisted_11, [
+                createBaseVNode("span", _hoisted_13, [
                   createVNode(_component_el_button, {
                     type: "primary",
                     size: "large",
                     style: { "width": "100%" },
-                    onClick: _cache[6] || (_cache[6] = ($event) => showUpdateLog.value = false)
+                    onClick: _cache[7] || (_cache[7] = ($event) => showUpdateLog.value = false)
                   }, {
-                    default: withCtx(() => [..._cache[15] || (_cache[15] = [
+                    default: withCtx(() => [..._cache[17] || (_cache[17] = [
                       createTextVNode(" 开启新体验 ", -1)
                     ])]),
                     _: 1
@@ -84096,9 +87264,9 @@ var require_index_001 = __commonJS({
                 ])
               ]),
               default: withCtx(() => [
-                createBaseVNode("div", _hoisted_6, [
-                  createBaseVNode("h3", _hoisted_7, "版本 v" + toDisplayString(appVersion.value), 1),
-                  isLoadingLog.value ? (openBlock(), createElementBlock("div", _hoisted_8, [
+                createBaseVNode("div", _hoisted_8, [
+                  createBaseVNode("h3", _hoisted_9, "版本 v" + toDisplayString(appVersion.value), 1),
+                  isLoadingLog.value ? (openBlock(), createElementBlock("div", _hoisted_10, [
                     createVNode(_component_el_icon, {
                       class: "is-loading",
                       style: { "font-size": "24px", "vertical-align": "middle", "margin-right": "8px" }
@@ -84108,16 +87276,16 @@ var require_index_001 = __commonJS({
                       ]),
                       _: 1
                     }),
-                    _cache[13] || (_cache[13] = createBaseVNode("span", { style: { "vertical-align": "middle" } }, "正在获取更新内容...", -1))
-                  ])) : (openBlock(), createElementBlock("ul", _hoisted_9, [
+                    _cache[15] || (_cache[15] = createBaseVNode("span", { style: { "vertical-align": "middle" } }, "正在获取更新内容...", -1))
+                  ])) : (openBlock(), createElementBlock("ul", _hoisted_11, [
                     (openBlock(true), createElementBlock(Fragment, null, renderList(updateContent.value, (item, index) => {
                       return openBlock(), createElementBlock("li", {
                         key: index,
                         innerHTML: item
-                      }, null, 8, _hoisted_10);
+                      }, null, 8, _hoisted_12);
                     }), 128))
                   ])),
-                  _cache[14] || (_cache[14] = createBaseVNode("p", { style: { "color": "#888", "margin-top": "25px", "font-size": "13px", "text-align": "center" } }, " (此消息仅在更新后首次打开时提示) ", -1))
+                  _cache[16] || (_cache[16] = createBaseVNode("p", { style: { "color": "#888", "margin-top": "25px", "font-size": "13px", "text-align": "center" } }, " (此消息仅在更新后首次打开时提示) ", -1))
                 ])
               ]),
               _: 1
